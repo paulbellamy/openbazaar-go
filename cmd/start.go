@@ -56,6 +56,7 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/OpenBazaar/openbazaar-go/bitcoin/zcash"
 	"github.com/OpenBazaar/openbazaar-go/bitcoin/zcashd"
 	"github.com/ipfs/go-ipfs/repo/fsrepo"
 	lockfile "github.com/ipfs/go-ipfs/repo/fsrepo/lock"
@@ -642,6 +643,20 @@ func (x *Start) Execute(args []string) error {
 			usetor = true
 		}
 		cryptoWallet, err = zcashd.NewZcashdWallet(mn, &params, repoPath, walletCfg.TrustedPeer, walletCfg.Binary, usetor, controlPort)
+		if err != nil {
+			return err
+		}
+		if !x.DisableExchangeRates {
+			exchangeRates = zcashd.NewZcashPriceFetcher(torDialer)
+		}
+		resyncManager = resync.NewResyncManager(sqliteDB.Sales(), cryptoWallet)
+	case "zcash-experimental":
+		walletTypeStr = "zcash experimental"
+		usetor := false
+		if usingTor && !usingClearnet {
+			usetor = true
+		}
+		cryptoWallet, err = zcash.NewWallet(mn, &params, repoPath, walletCfg.TrustedPeer, usetor, controlPort)
 		if err != nil {
 			return err
 		}
