@@ -3,21 +3,42 @@ package zcash
 import (
 	"time"
 
+	"github.com/OpenBazaar/multiwallet/keys"
 	"github.com/OpenBazaar/openbazaar-go/bitcoin/zcashd"
 	wallet "github.com/OpenBazaar/wallet-interface"
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	btc "github.com/btcsuite/btcutil"
 	hd "github.com/btcsuite/btcutil/hdkeychain"
+	b39 "github.com/tyler-smith/go-bip39"
+	"golang.org/x/net/proxy"
 )
 
 type Wallet struct {
-	params *chaincfg.Params
+	Config
+	keyManager *keys.KeyManager
 }
 
-func NewWallet(mnemonic string, params *chaincfg.Params, repoPath string, trustedPeer string, useTor bool, torControlPort int) (*Wallet, error) {
+type Config struct {
+	Mnemonic    string
+	Params      *chaincfg.Params
+	RepoPath    string
+	TrustedPeer string
+	DB          wallet.Keys
+	Proxy       proxy.Dialer
+}
+
+func NewWallet(config Config) (*Wallet, error) {
+	seed := b39.NewSeed(config.Mnemonic, "")
+	mPrivKey, _ := hd.NewMaster(seed, config.Params)
+	keyManager, err := keys.NewKeyManager(config.DB, config.Params, mPrivKey, keys.Zcash)
+	if err != nil {
+		return nil, err
+	}
+
 	return &Wallet{
-		params: params,
+		Config:     config,
+		keyManager: keyManager,
 	}, nil
 }
 
@@ -28,12 +49,12 @@ func (w *Wallet) Start() {
 
 // Return the network parameters
 func (w *Wallet) Params() *chaincfg.Params {
-	return w.params
+	return w.Config.Params
 }
 
 // Returns the type of crytocurrency this wallet implements
 func (w *Wallet) CurrencyCode() string {
-	if w.params.Name != chaincfg.MainNetParams.Name {
+	if w.Config.Params.Name != chaincfg.MainNetParams.Name {
 		return "tzec"
 	}
 	return "zec"
@@ -55,8 +76,11 @@ func (w *Wallet) MasterPublicKey() *hd.ExtendedKey {
 }
 
 // Get the current address for the given purpose
+// TODO: Handle these errors
 func (w *Wallet) CurrentAddress(purpose wallet.KeyPurpose) btc.Address {
-	panic("not implemented")
+	key, _ := w.keyManager.GetCurrentKey(purpose)
+	address, _ := key.Address(w.Config.Params)
+	return address
 }
 
 // Returns a fresh address that has never been returned by this function
@@ -72,7 +96,7 @@ func (w *Wallet) DecodeAddress(addr string) (btc.Address, error) {
 // Turn the given output script into an address
 // TODO: Use multiwallet for this
 func (w *Wallet) ScriptToAddress(script []byte) (btc.Address, error) {
-	return zcashd.ExtractPkScriptAddrs(script, w.params)
+	return zcashd.ExtractPkScriptAddrs(script, w.Config.Params)
 }
 
 // Turn the given address into an output script

@@ -656,7 +656,7 @@ func (x *Start) Execute(args []string) error {
 		if usingTor && !usingClearnet {
 			usetor = true
 		}
-		cryptoWallet, err = zcash.NewWallet(mn, &params, repoPath, walletCfg.TrustedPeer, usetor, controlPort)
+		cryptoWallet, err = zcash.NewWallet(mn, &params, repoPath, walletCfg.TrustedPeer, sqliteDB, torDialer)
 		if err != nil {
 			return err
 		}
