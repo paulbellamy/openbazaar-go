@@ -10,13 +10,16 @@ import (
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	btc "github.com/btcsuite/btcutil"
 	hd "github.com/btcsuite/btcutil/hdkeychain"
+	"github.com/btcsuite/btcwallet/wallet/txrules"
 	b39 "github.com/tyler-smith/go-bip39"
 	"golang.org/x/net/proxy"
 )
 
 type Wallet struct {
 	Config
-	keyManager *keys.KeyManager
+	keyManager       *keys.KeyManager
+	masterPrivateKey *hd.ExtendedKey
+	masterPublicKey  *hd.ExtendedKey
 }
 
 type Config struct {
@@ -31,14 +34,17 @@ type Config struct {
 func NewWallet(config Config) (*Wallet, error) {
 	seed := b39.NewSeed(config.Mnemonic, "")
 	mPrivKey, _ := hd.NewMaster(seed, config.Params)
+	mPubKey, _ := mPrivKey.Neuter()
 	keyManager, err := keys.NewKeyManager(config.DB, config.Params, mPrivKey, keys.Zcash)
 	if err != nil {
 		return nil, err
 	}
 
 	return &Wallet{
-		Config:     config,
-		keyManager: keyManager,
+		Config:           config,
+		keyManager:       keyManager,
+		masterPrivateKey: mPrivKey,
+		masterPublicKey:  mPubKey,
 	}, nil
 }
 
@@ -61,22 +67,24 @@ func (w *Wallet) CurrencyCode() string {
 }
 
 // Check if this amount is considered dust
+// TODO: Follow up https://github.com/zcash/zcash/issues/2133
 func (w *Wallet) IsDust(amount int64) bool {
-	panic("not implemented")
+	return txrules.IsDustAmount(btc.Amount(amount), 25, txrules.DefaultRelayFeePerKb)
 }
 
 // Get the master private key
 func (w *Wallet) MasterPrivateKey() *hd.ExtendedKey {
-	panic("not implemented")
+	return w.masterPrivateKey
 }
 
 // Get the master public key
 func (w *Wallet) MasterPublicKey() *hd.ExtendedKey {
-	panic("not implemented")
+	return w.masterPublicKey
 }
 
 // Get the current address for the given purpose
 // TODO: Handle these errors
+// TODO: Generate actual t-addresses here, not bitcoin addresses
 func (w *Wallet) CurrentAddress(purpose wallet.KeyPurpose) btc.Address {
 	key, _ := w.keyManager.GetCurrentKey(purpose)
 	address, _ := key.Address(w.Config.Params)

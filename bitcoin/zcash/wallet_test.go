@@ -2,11 +2,14 @@ package zcash
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/OpenBazaar/multiwallet/keys"
 	wallet "github.com/OpenBazaar/wallet-interface"
 	"github.com/btcsuite/btcd/chaincfg"
+	btc "github.com/btcsuite/btcutil"
+	"github.com/btcsuite/btcutil/base58"
 	hd "github.com/btcsuite/btcutil/hdkeychain"
 	b39 "github.com/tyler-smith/go-bip39"
 )
@@ -47,6 +50,27 @@ func TestWalletParams(t *testing.T) {
 			config.Params,
 			w.Params(),
 		)
+	}
+}
+
+func TestWalletIsDust(t *testing.T) {
+	w, err := NewWallet(testConfig(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, amount := range []int64{0, 1e2 - 1, 400} {
+		t.Run(fmt.Sprint(amount), func(t *testing.T) {
+			if !w.IsDust(amount) {
+				t.Errorf("Expected IsDust to be true")
+			}
+		})
+	}
+	for _, amount := range []int64{(1e3) + 1, 1e4} {
+		t.Run(fmt.Sprint(amount), func(t *testing.T) {
+			if w.IsDust(amount) {
+				t.Errorf("Expected IsDust to be false")
+			}
+		})
 	}
 }
 
@@ -107,7 +131,13 @@ func TestWalletCurrentAddress(t *testing.T) {
 
 	address := w.CurrentAddress(wallet.EXTERNAL)
 
-	expected, _ := externalChild.Address(config.Params)
+	if !strings.HasPrefix(fmt.Sprint(address), "t2") || len(fmt.Sprint(address)) != 36 {
+		t.Errorf("generated address was not a zcash t-address: %v", address)
+	}
+
+	// TODO: This isn't right.
+	pubkey, _ := externalChild.ECPubKey()
+	expected := base58.CheckEncode(append([]byte{0x1c, 0xb8}, btc.Hash160(pubkey.SerializeCompressed())...), config.Params.PubKeyHashAddrID)
 	if fmt.Sprint(address) != fmt.Sprint(expected) {
 		t.Errorf(
 			"CurrentAddress() did not return expected.\nExpected: %v\n     Got: %v",
