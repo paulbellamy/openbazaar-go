@@ -84,11 +84,12 @@ func (w *Wallet) MasterPublicKey() *hd.ExtendedKey {
 
 // Get the current address for the given purpose
 // TODO: Handle these errors
-// TODO: Generate actual t-addresses here, not bitcoin addresses
+// TODO: Use multiwallet for this
 func (w *Wallet) CurrentAddress(purpose wallet.KeyPurpose) btc.Address {
 	key, _ := w.keyManager.GetCurrentKey(purpose)
-	address, _ := key.Address(w.Config.Params)
-	return address
+	pubkey, _ := key.ECPubKey()
+	addr, _ := zcashd.NewAddressPubKeyHash(btc.Hash160(pubkey.SerializeUncompressed()), w.Config.Params)
+	return addr
 }
 
 // Returns a fresh address that has never been returned by this function

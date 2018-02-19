@@ -6,10 +6,10 @@ import (
 	"testing"
 
 	"github.com/OpenBazaar/multiwallet/keys"
+	"github.com/OpenBazaar/openbazaar-go/bitcoin/zcashd"
 	wallet "github.com/OpenBazaar/wallet-interface"
 	"github.com/btcsuite/btcd/chaincfg"
 	btc "github.com/btcsuite/btcutil"
-	"github.com/btcsuite/btcutil/base58"
 	hd "github.com/btcsuite/btcutil/hdkeychain"
 	b39 "github.com/tyler-smith/go-bip39"
 )
@@ -111,6 +111,7 @@ func TestWalletCurrentAddress(t *testing.T) {
 	// Generate a key, and initialize the wallet with it.
 	// TODO: Check this key is fetched from the db
 	config := testConfig(t)
+	config.Params = &chaincfg.MainNetParams
 	config.Mnemonic = "" // TODO: Set this
 	seed := b39.NewSeed(config.Mnemonic, "")
 	mPrivKey, _ := hd.NewMaster(seed, config.Params)
@@ -131,13 +132,16 @@ func TestWalletCurrentAddress(t *testing.T) {
 
 	address := w.CurrentAddress(wallet.EXTERNAL)
 
-	if !strings.HasPrefix(fmt.Sprint(address), "t2") || len(fmt.Sprint(address)) != 36 {
+	if !strings.HasPrefix(fmt.Sprint(address), "t1") || len(fmt.Sprint(address)) != 35 {
 		t.Errorf("generated address was not a zcash t-address: %v", address)
 	}
 
-	// TODO: This isn't right.
 	pubkey, _ := externalChild.ECPubKey()
-	expected := base58.CheckEncode(append([]byte{0x1c, 0xb8}, btc.Hash160(pubkey.SerializeCompressed())...), config.Params.PubKeyHashAddrID)
+	hash, err := zcashd.NewAddressPubKeyHash(btc.Hash160(pubkey.SerializeUncompressed()), config.Params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected := hash.EncodeAddress()
 	if fmt.Sprint(address) != fmt.Sprint(expected) {
 		t.Errorf(
 			"CurrentAddress() did not return expected.\nExpected: %v\n     Got: %v",
@@ -148,7 +152,9 @@ func TestWalletCurrentAddress(t *testing.T) {
 }
 
 func TestWalletScriptToAddress(t *testing.T) {
-	w, err := NewWallet(testConfig(t))
+	config := testConfig(t)
+	config.Params = &chaincfg.MainNetParams
+	w, err := NewWallet(config)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,7 +175,7 @@ func TestWalletScriptToAddress(t *testing.T) {
 		{
 			name:    "basic script",
 			script:  []byte{0xa9, 0x14, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x87},
-			address: "t26YoyZ1iPgiMEWL4zGUm74eVWfhyDMXzY2",
+			address: "t3JZcvsuaXE6ygokL4XUiZSTrQBUoPYFnXJ",
 			err:     nil,
 		},
 	} {
