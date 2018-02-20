@@ -9,6 +9,8 @@ import (
 	"github.com/OpenBazaar/openbazaar-go/bitcoin/zcashd"
 	wallet "github.com/OpenBazaar/wallet-interface"
 	"github.com/btcsuite/btcd/chaincfg"
+	"github.com/btcsuite/btcd/chaincfg/chainhash"
+	"github.com/btcsuite/btcd/wire"
 	btc "github.com/btcsuite/btcutil"
 	hd "github.com/btcsuite/btcutil/hdkeychain"
 	b39 "github.com/tyler-smith/go-bip39"
@@ -20,9 +22,11 @@ func testConfig(t *testing.T) Config {
 		Params:      &chaincfg.TestNet3Params,
 		RepoPath:    "",
 		TrustedPeer: "",
-		DB: &FakeKeystore{
-			getLookaheadWindows: func() map[wallet.KeyPurpose]int {
-				return map[wallet.KeyPurpose]int{wallet.EXTERNAL: keys.LOOKAHEADWINDOW}
+		DB: &FakeDatastore{
+			keys: &FakeKeystore{
+				getLookaheadWindows: func() map[wallet.KeyPurpose]int {
+					return map[wallet.KeyPurpose]int{wallet.EXTERNAL: keys.LOOKAHEADWINDOW}
+				},
 			},
 		},
 		Proxy: nil,
@@ -118,10 +122,12 @@ func TestWalletCurrentAddress(t *testing.T) {
 	_, external, _ := keys.Bip44Derivation(mPrivKey, keys.Zcash)
 	externalChild, _ := external.Child(0)
 	// Setup the keystore so the first key is unused.
-	config.DB = &FakeKeystore{
-		getUnused: func(p wallet.KeyPurpose) ([]int, error) { return []int{0}, nil },
-		getLookaheadWindows: func() map[wallet.KeyPurpose]int {
-			return map[wallet.KeyPurpose]int{wallet.EXTERNAL: keys.LOOKAHEADWINDOW}
+	config.DB = &FakeDatastore{
+		keys: &FakeKeystore{
+			getUnused: func(p wallet.KeyPurpose) ([]int, error) { return []int{0}, nil },
+			getLookaheadWindows: func() map[wallet.KeyPurpose]int {
+				return map[wallet.KeyPurpose]int{wallet.EXTERNAL: keys.LOOKAHEADWINDOW}
+			},
 		},
 	}
 	w, err := NewWallet(config)
@@ -155,15 +161,17 @@ func TestWalletNewAddress(t *testing.T) {
 	config := testConfig(t)
 	// markKeyAsUsed, should modify the output of getLastKeyIndex
 	unused := 0
-	config.DB = &FakeKeystore{
-		put: func(hash160 []byte, keyPath wallet.KeyPath) error { return nil },
-		markKeyAsUsed: func(scriptAddress []byte) error {
-			unused++
-			return nil
-		},
-		getLastKeyIndex: func(p wallet.KeyPurpose) (int, bool, error) { return unused, false, nil },
-		getLookaheadWindows: func() map[wallet.KeyPurpose]int {
-			return map[wallet.KeyPurpose]int{wallet.EXTERNAL: keys.LOOKAHEADWINDOW}
+	config.DB = &FakeDatastore{
+		keys: &FakeKeystore{
+			put: func(hash160 []byte, keyPath wallet.KeyPath) error { return nil },
+			markKeyAsUsed: func(scriptAddress []byte) error {
+				unused++
+				return nil
+			},
+			getLastKeyIndex: func(p wallet.KeyPurpose) (int, bool, error) { return unused, false, nil },
+			getLookaheadWindows: func() map[wallet.KeyPurpose]int {
+				return map[wallet.KeyPurpose]int{wallet.EXTERNAL: keys.LOOKAHEADWINDOW}
+			},
 		},
 	}
 	w, err := NewWallet(config)
@@ -277,5 +285,52 @@ func TestWalletDecodeAddress(t *testing.T) {
 			}
 		})
 	}
+}
 
+// TODO: test it ignores watch-only
+// TODO: test unconfirmed
+func TestWalletBalance(t *testing.T) {
+	config := testConfig(t)
+	db := config.DB.(*FakeDatastore)
+
+	hash1, _ := chainhash.NewHashFromStr("a")
+	hash2, _ := chainhash.NewHashFromStr("b")
+	db.utxos = &FakeUtxos{
+		getAll: func() ([]wallet.Utxo, error) {
+			return []wallet.Utxo{
+				{
+					Op:       wire.OutPoint{Hash: *hash1},
+					AtHeight: 4, // Confirmed
+					Value:    1,
+				},
+				{
+					Op:       wire.OutPoint{Hash: *hash2},
+					AtHeight: 0, // Unconfirmed
+					Value:    2,
+				},
+			}, nil
+		},
+	}
+	db.stxos = &FakeStxos{
+		getAll: func() ([]wallet.Stxo, error) {
+			return []wallet.Stxo{
+				// Confirm the first txn
+				{SpendHeight: 4, SpendTxid: *hash1},
+			}, nil
+		},
+	}
+	w, err := NewWallet(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	confirmed, unconfirmed := w.Balance()
+
+	expectedConfirmed, expectedUnconfirmed := int64(1), int64(2)
+	if confirmed != expectedConfirmed {
+		t.Errorf("Confirmed\nExpected: %v\n     Got: %v", expectedConfirmed, confirmed)
+	}
+	if unconfirmed != expectedUnconfirmed {
+		t.Errorf("Unconfirmed\nExpected: %v\n     Got: %v", expectedUnconfirmed, unconfirmed)
+	}
 }

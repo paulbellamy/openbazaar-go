@@ -1,6 +1,7 @@
 package zcash
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/OpenBazaar/multiwallet/keys"
@@ -27,7 +28,7 @@ type Config struct {
 	Params      *chaincfg.Params
 	RepoPath    string
 	TrustedPeer string
-	DB          wallet.Keys
+	DB          wallet.Datastore
 	Proxy       proxy.Dialer
 }
 
@@ -35,7 +36,7 @@ func NewWallet(config Config) (*Wallet, error) {
 	seed := b39.NewSeed(config.Mnemonic, "")
 	mPrivKey, _ := hd.NewMaster(seed, config.Params)
 	mPubKey, _ := mPrivKey.Neuter()
-	keyManager, err := keys.NewKeyManager(config.DB, config.Params, mPrivKey, keys.Zcash)
+	keyManager, err := keys.NewKeyManager(config.DB.Keys(), config.Params, mPrivKey, keys.Zcash)
 	if err != nil {
 		return nil, err
 	}
@@ -94,7 +95,7 @@ func (w *Wallet) CurrentAddress(purpose wallet.KeyPurpose) btc.Address {
 func (w *Wallet) NewAddress(purpose wallet.KeyPurpose) btc.Address {
 	key, _ := w.keyManager.GetFreshKey(purpose)
 	addr := keyToAddress(key, w.Config.Params)
-	w.DB.MarkKeyAsUsed(addr.ScriptAddress())
+	w.DB.Keys().MarkKeyAsUsed(addr.ScriptAddress())
 	return addr
 }
 
@@ -127,8 +128,50 @@ func (w *Wallet) HasKey(addr btc.Address) bool {
 }
 
 // Get the confirmed and unconfirmed balances
+// TODO: Handle these errors
+// TODO: Track and figure out how the utxos/stxos get populated in the real app
 func (w *Wallet) Balance() (confirmed, unconfirmed int64) {
-	panic("not implemented")
+	utxos, _ := w.DB.Utxos().GetAll()
+	stxos, _ := w.DB.Stxos().GetAll()
+	for _, utxo := range utxos {
+		if !utxo.WatchOnly {
+			if utxo.AtHeight > 0 {
+				confirmed += utxo.Value
+			} else {
+				if w.checkIfStxoIsConfirmed(utxo, stxos) {
+					confirmed += utxo.Value
+				} else {
+					unconfirmed += utxo.Value
+				}
+			}
+		}
+	}
+	return confirmed, unconfirmed
+}
+
+func (w *Wallet) checkIfStxoIsConfirmed(utxo wallet.Utxo, stxos []wallet.Stxo) bool {
+	for _, stxo := range stxos {
+		if !stxo.Utxo.WatchOnly {
+			if stxo.SpendTxid.IsEqual(&utxo.Op.Hash) {
+				if stxo.SpendHeight > 0 {
+					println("utxo", fmt.Sprint(utxo), "matched spent stxo:", fmt.Sprint(stxo), "utxo confirmed")
+					return true
+				} else {
+					println("utxo", fmt.Sprint(utxo), "matched unspent stxo:", fmt.Sprint(stxo), "recursing")
+					return w.checkIfStxoIsConfirmed(stxo.Utxo, stxos)
+				}
+			} else if stxo.Utxo.IsEqual(&utxo) {
+				if stxo.Utxo.AtHeight > 0 {
+					println("stxo.Utxo.AtHeight:", stxo.Utxo.AtHeight, "utxo confirmed")
+					return true
+				} else {
+					println("stxo.Utxo.AtHeight:", stxo.Utxo.AtHeight, "utxo unconfirmed")
+					return false
+				}
+			}
+		}
+	}
+	return false
 }
 
 // Returns a list of transactions for this wallet

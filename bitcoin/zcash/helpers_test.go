@@ -5,6 +5,20 @@ import (
 	"github.com/btcsuite/btcd/btcec"
 )
 
+type FakeDatastore struct {
+	utxos          wallet.Utxos
+	stxos          wallet.Stxos
+	txns           wallet.Txns
+	keys           wallet.Keys
+	watchedScripts wallet.WatchedScripts
+}
+
+func (f *FakeDatastore) Utxos() wallet.Utxos                   { return f.utxos }
+func (f *FakeDatastore) Stxos() wallet.Stxos                   { return f.stxos }
+func (f *FakeDatastore) Txns() wallet.Txns                     { return f.txns }
+func (f *FakeDatastore) Keys() wallet.Keys                     { return f.keys }
+func (f *FakeDatastore) WatchedScripts() wallet.WatchedScripts { return f.watchedScripts }
+
 type FakeKeystore struct {
 	put                 func(hash160 []byte, keyPath wallet.KeyPath) error
 	importKey           func(scriptAddress []byte, key *btcec.PrivateKey) error
@@ -98,4 +112,85 @@ func (f *FakeKeystore) GetLookaheadWindows() map[wallet.KeyPurpose]int {
 		panic("not implemented")
 	}
 	return f.getLookaheadWindows()
+}
+
+type FakeUtxos struct {
+	// Put a utxo to the database
+	put func(utxo wallet.Utxo) error
+
+	// Fetch all utxos from the db
+	getAll func() ([]wallet.Utxo, error)
+
+	// Make a utxo unspendable
+	setWatchOnly func(utxo wallet.Utxo) error
+
+	// Delete a utxo from the db
+	delete func(utxo wallet.Utxo) error
+}
+
+// Put a utxo to the database
+func (f *FakeUtxos) Put(utxo wallet.Utxo) error {
+	if f.put == nil {
+		panic("not implemented")
+	}
+	return f.put(utxo)
+}
+
+// Fetch all utxos from the db
+func (f *FakeUtxos) GetAll() ([]wallet.Utxo, error) {
+	if f.getAll == nil {
+		panic("not implemented")
+	}
+	return f.getAll()
+}
+
+// Make a utxo unspendable
+func (f *FakeUtxos) SetWatchOnly(utxo wallet.Utxo) error {
+	if f.setWatchOnly == nil {
+		panic("not implemented")
+	}
+	return f.setWatchOnly(utxo)
+}
+
+// Delete a utxo from the db
+func (f *FakeUtxos) Delete(utxo wallet.Utxo) error {
+	if f.delete == nil {
+		panic("not implemented")
+	}
+	return f.delete(utxo)
+}
+
+type FakeStxos struct {
+	// Put a stxo to the database
+	put func(stxo wallet.Stxo) error
+
+	// Fetch all stxos from the db
+	getAll func() ([]wallet.Stxo, error)
+
+	// Delete a stxo from the db
+	delete func(stxo wallet.Stxo) error
+}
+
+// Put a stxo to the database
+func (f *FakeStxos) Put(stxo wallet.Stxo) error {
+	if f.put == nil {
+		panic("not implemented")
+	}
+	return f.put(stxo)
+}
+
+// Fetch all stxos from the db
+func (f *FakeStxos) GetAll() ([]wallet.Stxo, error) {
+	if f.getAll == nil {
+		panic("not implemented")
+	}
+	return f.getAll()
+}
+
+// Delete a stxo from the db
+func (f *FakeStxos) Delete(stxo wallet.Stxo) error {
+	if f.delete == nil {
+		panic("not implemented")
+	}
+	return f.delete(stxo)
 }
