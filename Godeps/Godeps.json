@@ -4,6 +4,10 @@
 	"GodepVersion": "v79",
 	"Deps": [
 		{
+			"ImportPath": "github.com/OpenBazaar/multiwallet",
+			"Rev": "7e24250975f269114ffee00fa0ce66de763a1a0e"
+		},
+		{
 			"ImportPath": "github.com/OpenBazaar/go-blockstackclient",
 			"Rev": "28fae9038857d4a311f2b5e5c45c05b15ff78582"
 		},
