@@ -39,7 +39,7 @@ func (f *FakeKeystore) MarkKeyAsUsed(scriptAddress []byte) error {
 	if f.markKeyAsUsed == nil {
 		panic("not implemented")
 	}
-	return f.MarkKeyAsUsed(scriptAddress)
+	return f.markKeyAsUsed(scriptAddress)
 }
 
 // Fetch the last index for the given key purpose

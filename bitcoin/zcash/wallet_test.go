@@ -109,7 +109,6 @@ func TestWalletCurrencyCodeTestnet(t *testing.T) {
 
 func TestWalletCurrentAddress(t *testing.T) {
 	// Generate a key, and initialize the wallet with it.
-	// TODO: Check this key is fetched from the db
 	config := testConfig(t)
 	config.Params = &chaincfg.MainNetParams
 	config.Mnemonic = "" // TODO: Set this
@@ -148,6 +147,43 @@ func TestWalletCurrentAddress(t *testing.T) {
 			expected,
 			address,
 		)
+	}
+}
+
+func TestWalletNewAddress(t *testing.T) {
+	// Generate a key, and initialize the wallet with it.
+	config := testConfig(t)
+	// markKeyAsUsed, should modify the output of getLastKeyIndex
+	unused := 0
+	config.DB = &FakeKeystore{
+		put: func(hash160 []byte, keyPath wallet.KeyPath) error { return nil },
+		markKeyAsUsed: func(scriptAddress []byte) error {
+			unused++
+			return nil
+		},
+		getLastKeyIndex: func(p wallet.KeyPurpose) (int, bool, error) { return unused, false, nil },
+		getLookaheadWindows: func() map[wallet.KeyPurpose]int {
+			return map[wallet.KeyPurpose]int{wallet.EXTERNAL: keys.LOOKAHEADWINDOW}
+		},
+	}
+	w, err := NewWallet(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Generate some addresses
+	addresses := make([]btc.Address, 10)
+	for i := 0; i < 10; i++ {
+		addresses[i] = w.NewAddress(wallet.EXTERNAL)
+	}
+
+	// all addresses should be unique
+	addrMap := map[string]struct{}{}
+	for _, a := range addresses {
+		addrMap[fmt.Sprint(a)] = struct{}{}
+	}
+	if len(addrMap) != len(addresses) {
+		t.Errorf("Found duplicate addresses from NewAddress: %v", addresses)
 	}
 }
 
@@ -191,6 +227,51 @@ func TestWalletScriptToAddress(t *testing.T) {
 			}
 			if tc.address != "" || address != nil {
 				if fmt.Sprint(address) != tc.address {
+					t.Errorf("\nExpected: %v\n     Got: %v", tc.address, address)
+				}
+			}
+		})
+	}
+}
+
+func TestWalletDecodeAddress(t *testing.T) {
+	w, err := NewWallet(testConfig(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// TODO: Test this better
+	for _, tc := range []struct {
+		name    string
+		address string
+		err     error
+	}{
+		{
+			name:    "empty address",
+			address: "",
+			err:     fmt.Errorf("decoded address is of unknown format"),
+		},
+		{
+			name:    "basic address",
+			address: "tmG2NhraCEiMeaajMjLraFjKVeGP8RWZXz6",
+			err:     nil,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			address, err := w.DecodeAddress(tc.address)
+			switch {
+			case tc.err == nil && err != nil:
+				t.Errorf("\nUnexpected error: %v\n             Got: %v", tc.err, err)
+			case tc.err != nil && err == nil:
+				t.Errorf("\nUnexpected error: %v\n             Got: %v", tc.err, err)
+			case tc.err != nil && err != nil && tc.err.Error() != err.Error():
+				t.Errorf("\nUnexpected error: %v\n             Got: %v", tc.err, err)
+			}
+
+			// re-encoding it should equal the original input
+			if address != nil {
+				output := address.EncodeAddress()
+				if tc.address != output {
 					t.Errorf("\nExpected: %v\n     Got: %v", tc.address, address)
 				}
 			}

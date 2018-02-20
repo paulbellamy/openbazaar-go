@@ -87,19 +87,27 @@ func (w *Wallet) MasterPublicKey() *hd.ExtendedKey {
 // TODO: Use multiwallet for this
 func (w *Wallet) CurrentAddress(purpose wallet.KeyPurpose) btc.Address {
 	key, _ := w.keyManager.GetCurrentKey(purpose)
-	pubkey, _ := key.ECPubKey()
-	addr, _ := zcashd.NewAddressPubKeyHash(btc.Hash160(pubkey.SerializeUncompressed()), w.Config.Params)
-	return addr
+	return keyToAddress(key, w.Config.Params)
 }
 
 // Returns a fresh address that has never been returned by this function
 func (w *Wallet) NewAddress(purpose wallet.KeyPurpose) btc.Address {
-	panic("not implemented")
+	key, _ := w.keyManager.GetFreshKey(purpose)
+	addr := keyToAddress(key, w.Config.Params)
+	w.DB.MarkKeyAsUsed(addr.ScriptAddress())
+	return addr
+}
+
+func keyToAddress(key *hd.ExtendedKey, params *chaincfg.Params) btc.Address {
+	pubkey, _ := key.ECPubKey()
+	addr, _ := zcashd.NewAddressPubKeyHash(btc.Hash160(pubkey.SerializeUncompressed()), params)
+	return addr
 }
 
 // Parse the address string and return an address interface
+// TODO: Use multiwallet for this, maybe
 func (w *Wallet) DecodeAddress(addr string) (btc.Address, error) {
-	panic("not implemented")
+	return zcashd.DecodeAddress(addr, w.Config.Params)
 }
 
 // Turn the given output script into an address
