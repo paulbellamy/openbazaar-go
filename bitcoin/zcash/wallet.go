@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/OpenBazaar/multiwallet/client"
 	"github.com/OpenBazaar/multiwallet/keys"
 	"github.com/OpenBazaar/openbazaar-go/bitcoin/zcashd"
 	wallet "github.com/OpenBazaar/wallet-interface"
@@ -21,6 +22,7 @@ type Wallet struct {
 	keyManager       *keys.KeyManager
 	masterPrivateKey *hd.ExtendedKey
 	masterPublicKey  *hd.ExtendedKey
+	insight          InsightClient
 }
 
 type Config struct {
@@ -32,6 +34,16 @@ type Config struct {
 	Proxy       proxy.Dialer
 }
 
+// Stubbable for testing
+var newInsightClient = func(url string, proxyDialer proxy.Dialer) (InsightClient, error) {
+	return client.NewInsightClient(url, proxyDialer)
+}
+
+type InsightClient interface {
+	GetTransactions(addrs []btc.Address) ([]client.Transaction, error)
+	TransactionNotify() <-chan client.Transaction
+}
+
 func NewWallet(config Config) (*Wallet, error) {
 	seed := b39.NewSeed(config.Mnemonic, "")
 	mPrivKey, _ := hd.NewMaster(seed, config.Params)
@@ -40,18 +52,54 @@ func NewWallet(config Config) (*Wallet, error) {
 	if err != nil {
 		return nil, err
 	}
+	insight, err := newInsightClient(config.TrustedPeer, config.Proxy)
+	if err != nil {
+		return nil, err
+	}
 
-	return &Wallet{
+	w := &Wallet{
 		Config:           config,
 		keyManager:       keyManager,
 		masterPrivateKey: mPrivKey,
 		masterPublicKey:  mPubKey,
-	}, nil
+		insight:          insight,
+	}
+
+	// Load initial transactions
+	// TODO: Should this be done in `Start`?
+	txns, err := w.insight.GetTransactions(w.getAddresses())
+	if err != nil {
+		return nil, err
+	}
+	for _, txn := range txns {
+		if err := w.ingest(txn); err != nil {
+			return nil, err
+		}
+	}
+
+	return w, nil
+}
+
+func (w *Wallet) getAddresses() (addrs []btc.Address) {
+	for _, k := range w.keyManager.GetKeys() {
+		addrs = append(addrs, keyToAddress(k, w.Config.Params))
+	}
+	return addrs
+}
+
+// TODO: Check outputs/inputs
+// TODO: Check txn sanity here
+// TODO: Check txn is relevant
+// TODO: Figure out the wire tx (do we need to?)
+// TODO: Figure out the value
+func (w *Wallet) ingest(txn client.Transaction) error {
+	var value int
+	var watchOnly bool
+	return w.DB.Txns().Put(nil, value, txn.BlockHeight, time.Unix(txn.Time, 0), watchOnly)
 }
 
 // Start the wallet
 func (w *Wallet) Start() {
-	panic("not implemented")
 }
 
 // Return the network parameters
@@ -176,7 +224,7 @@ func (w *Wallet) checkIfStxoIsConfirmed(utxo wallet.Utxo, stxos []wallet.Stxo) b
 
 // Returns a list of transactions for this wallet
 func (w *Wallet) Transactions() ([]wallet.Txn, error) {
-	panic("not implemented")
+	return w.DB.Txns().GetAll(false)
 }
 
 // Get info on a specific transaction
@@ -256,5 +304,4 @@ func (w *Wallet) GetConfirmations(txid chainhash.Hash) (confirms, atHeight uint3
 
 // Cleanly disconnect from the wallet
 func (w *Wallet) Close() {
-	panic("not implemented")
 }

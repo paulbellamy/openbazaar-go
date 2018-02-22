@@ -1,8 +1,14 @@
 package zcash
 
 import (
+	"time"
+
+	"github.com/OpenBazaar/multiwallet/client"
 	wallet "github.com/OpenBazaar/wallet-interface"
 	"github.com/btcsuite/btcd/btcec"
+	"github.com/btcsuite/btcd/chaincfg/chainhash"
+	"github.com/btcsuite/btcd/wire"
+	"github.com/btcsuite/btcutil"
 )
 
 type FakeDatastore struct {
@@ -193,4 +199,71 @@ func (f *FakeStxos) Delete(stxo wallet.Stxo) error {
 		panic("not implemented")
 	}
 	return f.delete(stxo)
+}
+
+type FakeTxns struct {
+	put          func(txn *wire.MsgTx, value, height int, timestamp time.Time, watchOnly bool) error
+	get          func(txid chainhash.Hash) (*wire.MsgTx, wallet.Txn, error)
+	getAll       func(includeWatchOnly bool) ([]wallet.Txn, error)
+	updateHeight func(txid chainhash.Hash, height int) error
+	delete       func(txid *chainhash.Hash) error
+}
+
+// Put a new transaction to the database
+func (f *FakeTxns) Put(txn *wire.MsgTx, value, height int, timestamp time.Time, watchOnly bool) error {
+	if f.put == nil {
+		panic("not implemented")
+	}
+	return f.put(txn, value, height, timestamp, watchOnly)
+}
+
+// Fetch a raw tx and it's metadata given a hash
+func (f *FakeTxns) Get(txid chainhash.Hash) (*wire.MsgTx, wallet.Txn, error) {
+	if f.get == nil {
+		panic("not implemented")
+	}
+	return f.get(txid)
+}
+
+// Fetch all transactions from the db
+func (f *FakeTxns) GetAll(includeWatchOnly bool) ([]wallet.Txn, error) {
+	if f.getAll == nil {
+		panic("not implemented")
+	}
+	return f.getAll(includeWatchOnly)
+}
+
+// Update the height of a transaction
+func (f *FakeTxns) UpdateHeight(txid chainhash.Hash, height int) error {
+	if f.updateHeight == nil {
+		panic("not implemented")
+	}
+	return f.updateHeight(txid, height)
+}
+
+// Delete a transactions from the db
+func (f *FakeTxns) Delete(txid *chainhash.Hash) error {
+	if f.delete == nil {
+		panic("not implemented")
+	}
+	return f.delete(txid)
+}
+
+type FakeInsightClient struct {
+	getTransactions   func(addrs []btcutil.Address) ([]client.Transaction, error)
+	transactionNotify func() <-chan client.Transaction
+}
+
+func (f *FakeInsightClient) GetTransactions(addrs []btcutil.Address) ([]client.Transaction, error) {
+	if f.getTransactions == nil {
+		panic("not implemented")
+	}
+	return f.getTransactions(addrs)
+}
+
+func (f *FakeInsightClient) TransactionNotify() <-chan client.Transaction {
+	if f.transactionNotify == nil {
+		panic("not implemented")
+	}
+	return f.transactionNotify()
 }

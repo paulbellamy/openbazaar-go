@@ -2,9 +2,13 @@ package zcash
 
 import (
 	"fmt"
+	"golang.org/x/net/proxy"
+	"reflect"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/OpenBazaar/multiwallet/client"
 	"github.com/OpenBazaar/multiwallet/keys"
 	"github.com/OpenBazaar/openbazaar-go/bitcoin/zcashd"
 	wallet "github.com/OpenBazaar/wallet-interface"
@@ -15,6 +19,15 @@ import (
 	hd "github.com/btcsuite/btcutil/hdkeychain"
 	b39 "github.com/tyler-smith/go-bip39"
 )
+
+func init() {
+	newInsightClient = func(url string, proxyDialer proxy.Dialer) (InsightClient, error) {
+		return &FakeInsightClient{
+			getTransactions:   func(addrs []btc.Address) ([]client.Transaction, error) { return nil, nil },
+			transactionNotify: func() <-chan client.Transaction { return nil },
+		}, nil
+	}
+}
 
 func testConfig(t *testing.T) Config {
 	return Config{
@@ -332,5 +345,56 @@ func TestWalletBalance(t *testing.T) {
 	}
 	if unconfirmed != expectedUnconfirmed {
 		t.Errorf("Unconfirmed\nExpected: %v\n     Got: %v", expectedUnconfirmed, unconfirmed)
+	}
+}
+
+// TODO: Test initial load of transactions
+// TODO: Test ongoing transactions
+// TODO: Test race condition of transactions coming in after initial load
+func TestWalletTransactionsInitialLoad(t *testing.T) {
+	txnChan := make(chan client.Transaction)
+	newInsightClient = func(url string, proxyDialer proxy.Dialer) (InsightClient, error) {
+		return &FakeInsightClient{
+			getTransactions: func(addrs []btc.Address) ([]client.Transaction, error) {
+				// TODO: Put some txns here
+				return []client.Transaction{{Txid: "a"}}, nil
+			},
+			transactionNotify: func() <-chan client.Transaction { return txnChan },
+		}, nil
+	}
+	config := testConfig(t)
+	expectedTxns := []wallet.Txn{{Txid: "a"}}
+	config.DB = &FakeDatastore{
+		keys: &FakeKeystore{
+			getAll: func() ([]wallet.KeyPath, error) {
+				return []wallet.KeyPath{{wallet.EXTERNAL, 0}}, nil
+			},
+			getLookaheadWindows: func() map[wallet.KeyPurpose]int {
+				return map[wallet.KeyPurpose]int{wallet.EXTERNAL: keys.LOOKAHEADWINDOW}
+			},
+		},
+		txns: &FakeTxns{
+			put: func(txn *wire.MsgTx, value, height int, timestamp time.Time, watchOnly bool) error {
+				return nil
+			},
+			getAll: func(includeWatchOnly bool) ([]wallet.Txn, error) {
+				return expectedTxns, nil
+			},
+		},
+	}
+	w, err := NewWallet(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.Start()
+	defer w.Close()
+
+	txns, err := w.Transactions()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !reflect.DeepEqual(txns, expectedTxns) {
+		t.Errorf("\nExpected: %v\n     Got: %v", expectedTxns, txns)
 	}
 }
