@@ -41,6 +41,7 @@ var newInsightClient = func(url string, proxyDialer proxy.Dialer) (InsightClient
 
 type InsightClient interface {
 	GetTransactions(addrs []btc.Address) ([]client.Transaction, error)
+	GetRawTransaction(txid string) ([]byte, error)
 	TransactionNotify() <-chan client.Transaction
 }
 

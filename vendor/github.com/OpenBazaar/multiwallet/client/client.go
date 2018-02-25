@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/OpenBazaar/multiwallet/client/transport"
 	"github.com/btcsuite/btcutil"
 	"github.com/graarh/golang-socketio"
 	"golang.org/x/net/proxy"
@@ -16,7 +17,6 @@ import (
 	"path"
 	"strconv"
 	"time"
-	"github.com/OpenBazaar/multiwallet/client/transport"
 )
 
 type InsightClient struct {
@@ -130,6 +130,19 @@ func (i *InsightClient) GetTransaction(txid string) (*Transaction, error) {
 		tx.Outputs[n].Value = f
 	}
 	return tx, nil
+}
+
+func (i *InsightClient) GetRawTransaction(txid string) ([]byte, error) {
+	resp, err := i.doRequest("rawtx/"+txid, http.MethodGet, nil, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	tx := new(RawTxResponse)
+	if err = json.NewDecoder(resp.Body).Decode(tx); err != nil {
+		return nil, fmt.Errorf("error decoding transactions: %s\n", err)
+	}
+	return []byte(tx.RawTx), nil
 }
 
 func (i *InsightClient) GetTransactions(addrs []btcutil.Address) ([]Transaction, error) {

@@ -250,6 +250,7 @@ func (f *FakeTxns) Delete(txid *chainhash.Hash) error {
 
 type FakeInsightClient struct {
 	getTransactions   func(addrs []btcutil.Address) ([]client.Transaction, error)
+	getRawTransaction func(txid string) ([]byte, error)
 	transactionNotify func() <-chan client.Transaction
 }
 
@@ -258,6 +259,13 @@ func (f *FakeInsightClient) GetTransactions(addrs []btcutil.Address) ([]client.T
 		panic("not implemented")
 	}
 	return f.getTransactions(addrs)
+}
+
+func (f *FakeInsightClient) GetRawTransaction(txid string) ([]byte, error) {
+	if f.getRawTransaction == nil {
+		panic("not implemented")
+	}
+	return f.getRawTransaction(txid)
 }
 
 func (f *FakeInsightClient) TransactionNotify() <-chan client.Transaction {
