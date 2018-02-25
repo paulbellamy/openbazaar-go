@@ -80,13 +80,6 @@ func NewWallet(config Config) (*Wallet, error) {
 	return w, nil
 }
 
-func (w *Wallet) getAddresses() (addrs []btc.Address) {
-	for _, k := range w.keyManager.GetKeys() {
-		addrs = append(addrs, keyToAddress(k, w.Config.Params))
-	}
-	return addrs
-}
-
 func (w *Wallet) ingest(txn client.Transaction) error {
 	raw, err := w.insight.GetRawTransaction(txn.Txid)
 	if err != nil {
@@ -105,7 +98,7 @@ func (w *Wallet) Start() {
 }
 
 func (w *Wallet) loadInitialTransactions() {
-	txns, err := w.insight.GetTransactions(w.getAddresses())
+	txns, err := w.insight.GetTransactions(keysToAddresses(w.Params(), w.keyManager.GetKeys()))
 	if err != nil {
 		log.Error(err)
 		return
@@ -143,7 +136,7 @@ func (w *Wallet) Params() *chaincfg.Params {
 
 // Returns the type of crytocurrency this wallet implements
 func (w *Wallet) CurrencyCode() string {
-	if w.Config.Params.Name != chaincfg.MainNetParams.Name {
+	if w.Params().Name != chaincfg.MainNetParams.Name {
 		return "tzec"
 	}
 	return "zec"
@@ -170,15 +163,22 @@ func (w *Wallet) MasterPublicKey() *hd.ExtendedKey {
 // TODO: Use multiwallet for this
 func (w *Wallet) CurrentAddress(purpose wallet.KeyPurpose) btc.Address {
 	key, _ := w.keyManager.GetCurrentKey(purpose)
-	return keyToAddress(key, w.Config.Params)
+	return keyToAddress(key, w.Params())
 }
 
 // Returns a fresh address that has never been returned by this function
 func (w *Wallet) NewAddress(purpose wallet.KeyPurpose) btc.Address {
 	key, _ := w.keyManager.GetFreshKey(purpose)
-	addr := keyToAddress(key, w.Config.Params)
+	addr := keyToAddress(key, w.Params())
 	w.DB.Keys().MarkKeyAsUsed(addr.ScriptAddress())
 	return addr
+}
+
+func keysToAddresses(params *chaincfg.Params, keys []*hd.ExtendedKey) (addrs []btc.Address) {
+	for _, k := range keys {
+		addrs = append(addrs, keyToAddress(k, params))
+	}
+	return addrs
 }
 
 func keyToAddress(key *hd.ExtendedKey, params *chaincfg.Params) btc.Address {
@@ -190,13 +190,13 @@ func keyToAddress(key *hd.ExtendedKey, params *chaincfg.Params) btc.Address {
 // Parse the address string and return an address interface
 // TODO: Use multiwallet for this, maybe
 func (w *Wallet) DecodeAddress(addr string) (btc.Address, error) {
-	return zcashd.DecodeAddress(addr, w.Config.Params)
+	return zcashd.DecodeAddress(addr, w.Params())
 }
 
 // Turn the given output script into an address
 // TODO: Use multiwallet for this
 func (w *Wallet) ScriptToAddress(script []byte) (btc.Address, error) {
-	return zcashd.ExtractPkScriptAddrs(script, w.Config.Params)
+	return zcashd.ExtractPkScriptAddrs(script, w.Params())
 }
 
 // Turn the given address into an output script
