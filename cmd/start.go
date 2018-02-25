@@ -652,11 +652,14 @@ func (x *Start) Execute(args []string) error {
 		resyncManager = resync.NewResyncManager(sqliteDB.Sales(), cryptoWallet)
 	case "zcash-experimental":
 		walletTypeStr = "zcash experimental"
-		usetor := false
-		if usingTor && !usingClearnet {
-			usetor = true
-		}
-		cryptoWallet, err = zcash.NewWallet(mn, &params, repoPath, walletCfg.TrustedPeer, sqliteDB, torDialer)
+		cryptoWallet, err = zcash.NewWallet(zcash.Config{
+			Mnemonic:    mn,
+			Params:      &params,
+			RepoPath:    repoPath,
+			TrustedPeer: walletCfg.TrustedPeer,
+			DB:          sqliteDB,
+			Proxy:       torDialer,
+		})
 		if err != nil {
 			return err
 		}
