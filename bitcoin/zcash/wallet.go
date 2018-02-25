@@ -13,9 +13,12 @@ import (
 	btc "github.com/btcsuite/btcutil"
 	hd "github.com/btcsuite/btcutil/hdkeychain"
 	"github.com/btcsuite/btcwallet/wallet/txrules"
+	"github.com/op/go-logging"
 	b39 "github.com/tyler-smith/go-bip39"
 	"golang.org/x/net/proxy"
 )
+
+var log = logging.MustGetLogger("zcash")
 
 type Wallet struct {
 	Config
@@ -23,6 +26,8 @@ type Wallet struct {
 	masterPrivateKey *hd.ExtendedKey
 	masterPublicKey  *hd.ExtendedKey
 	insight          InsightClient
+	txStore          TxStore
+	stopChan         chan struct{}
 }
 
 type Config struct {
@@ -53,7 +58,11 @@ func NewWallet(config Config) (*Wallet, error) {
 	if err != nil {
 		return nil, err
 	}
-	insight, err := newInsightClient(config.TrustedPeer, config.Proxy)
+	insight, err := newInsightClient(fmt.Sprintf("https://%s/api", config.TrustedPeer), config.Proxy)
+	if err != nil {
+		return nil, err
+	}
+	txStore, err := NewTxStore(config.Params, config.DB, keyManager)
 	if err != nil {
 		return nil, err
 	}
@@ -64,18 +73,8 @@ func NewWallet(config Config) (*Wallet, error) {
 		masterPrivateKey: mPrivKey,
 		masterPublicKey:  mPubKey,
 		insight:          insight,
-	}
-
-	// Load initial transactions
-	// TODO: Should this be done in `Start`?
-	txns, err := w.insight.GetTransactions(w.getAddresses())
-	if err != nil {
-		return nil, err
-	}
-	for _, txn := range txns {
-		if err := w.ingest(txn); err != nil {
-			return nil, err
-		}
+		txStore:          txStore,
+		stopChan:         make(chan struct{}),
 	}
 
 	return w, nil
@@ -88,19 +87,51 @@ func (w *Wallet) getAddresses() (addrs []btc.Address) {
 	return addrs
 }
 
-// TODO: Check outputs/inputs
-// TODO: Check txn sanity here
-// TODO: Check txn is relevant
-// TODO: Figure out the wire tx (do we need to?)
-// TODO: Figure out the value
 func (w *Wallet) ingest(txn client.Transaction) error {
-	var value int
-	var watchOnly bool
-	return w.DB.Txns().Put(nil, value, txn.BlockHeight, time.Unix(txn.Time, 0), watchOnly)
+	raw, err := w.insight.GetRawTransaction(txn.Txid)
+	if err != nil {
+		return err
+	}
+	return w.txStore.Ingest(txn, raw)
 }
 
 // Start the wallet
+// Load initial transactions, and watch for more.
+// TODO: check if there is a race between loading and watching (if a new txn
+// appears after load, before watch).
 func (w *Wallet) Start() {
+	w.loadInitialTransactions()
+	go w.watchTransactions()
+}
+
+func (w *Wallet) loadInitialTransactions() {
+	txns, err := w.insight.GetTransactions(w.getAddresses())
+	if err != nil {
+		log.Error(err)
+		return
+	}
+	for _, txn := range txns {
+		if err := w.ingest(txn); err != nil {
+			log.Error(err)
+			return
+		}
+	}
+}
+
+func (w *Wallet) watchTransactions() {
+	for {
+		select {
+		case <-w.stopChan:
+			return
+		case txn, ok := <-w.insight.TransactionNotify():
+			if !ok {
+				return
+			}
+			if err := w.ingest(txn); err != nil {
+				log.Error(err)
+			}
+		}
+	}
 }
 
 // Return the network parameters
@@ -305,4 +336,5 @@ func (w *Wallet) GetConfirmations(txid chainhash.Hash) (confirms, atHeight uint3
 
 // Cleanly disconnect from the wallet
 func (w *Wallet) Close() {
+	close(w.stopChan)
 }

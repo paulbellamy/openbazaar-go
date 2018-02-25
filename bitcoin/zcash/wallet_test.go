@@ -359,6 +359,7 @@ func TestWalletTransactionsInitialLoad(t *testing.T) {
 				// TODO: Put some txns here
 				return []client.Transaction{{Txid: "a"}}, nil
 			},
+			getRawTransaction: func(txid string) ([]byte, error) { return nil, nil },
 			transactionNotify: func() <-chan client.Transaction { return txnChan },
 		}, nil
 	}
@@ -366,9 +367,11 @@ func TestWalletTransactionsInitialLoad(t *testing.T) {
 	expectedTxns := []wallet.Txn{{Txid: "a"}}
 	config.DB = &FakeDatastore{
 		keys: &FakeKeystore{
+			put: func(hash160 []byte, keyPath wallet.KeyPath) error { return nil },
 			getAll: func() ([]wallet.KeyPath, error) {
 				return []wallet.KeyPath{{wallet.EXTERNAL, 0}}, nil
 			},
+			getLastKeyIndex: func(p wallet.KeyPurpose) (int, bool, error) { return 0, false, nil },
 			getLookaheadWindows: func() map[wallet.KeyPurpose]int {
 				return map[wallet.KeyPurpose]int{wallet.EXTERNAL: keys.LOOKAHEADWINDOW}
 			},
