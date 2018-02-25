@@ -1,17 +1,22 @@
 package zcash
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
 	"github.com/OpenBazaar/multiwallet/client"
 	wallet "github.com/OpenBazaar/wallet-interface"
+	"github.com/btcsuite/btcd/chaincfg/chainhash"
 )
 
 func TestTxStoreIngestAddsTxnsToDB(t *testing.T) {
 	var txns []wallet.Txn
 	db := &FakeDatastore{
 		txns: &FakeTxns{
+			get: func(txid chainhash.Hash) (wallet.Txn, error) {
+				return wallet.Txn{}, fmt.Errorf("not found")
+			},
 			put: func(txn []byte, txid string, value, height int, timestamp time.Time, watchOnly bool) error {
 				txns = append(txns, wallet.Txn{})
 				return nil
@@ -31,6 +36,47 @@ func TestTxStoreIngestAddsTxnsToDB(t *testing.T) {
 	}
 	if err := txStore.Ingest(txn, nil); err != nil {
 		t.Fatal(err)
+	}
+
+	if len(txns) != 1 {
+		t.Errorf("Expected 1 txn, got: %d", len(txns))
+	}
+}
+
+func TestTxStoreIngestIgnoresDuplicates(t *testing.T) {
+	var txns []wallet.Txn
+	db := &FakeDatastore{
+		txns: &FakeTxns{
+			get: func(txid chainhash.Hash) (wallet.Txn, error) {
+				for _, txn := range txns {
+					if txn.Txid == txid.String() {
+						return txn, nil
+					}
+				}
+				return wallet.Txn{}, fmt.Errorf("not found")
+			},
+			put: func(txn []byte, txid string, value, height int, timestamp time.Time, watchOnly bool) error {
+				txns = append(txns, wallet.Txn{Txid: txid})
+				return nil
+			},
+		},
+	}
+	txStore, err := NewTxStore(nil, db, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	txn := client.Transaction{
+		Txid:    "a",
+		Version: 1,
+		Inputs: []client.Input{
+			{},
+		},
+	}
+	for i := 0; i < 2; i++ {
+		if err := txStore.Ingest(txn, nil); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	if len(txns) != 1 {

@@ -22,18 +22,41 @@ type txStore struct {
 }
 
 func NewTxStore(params *chaincfg.Params, db wallet.Datastore, km *keys.KeyManager) (TxStore, error) {
-	return &txStore{db: db}, nil
+	return &txStore{
+		db: db,
+	}, nil
 }
 
 // TODO: Generate a raw, "wire" txn here, eugh. maybe just nil for now, This is the downside of using the insight api, is we don't get the raw txn data. (but we can ask for it)
-// TODO: Check if we've already processed this txn
+// TODO: Check if we've already processed this txn, and update height accordingly
 // TODO: Check for double-spends
 // TODO: Check txn is relevant
 func (t *txStore) Ingest(txn client.Transaction, raw []byte) error {
 	if err := validTxn(txn); err != nil {
 		return err
 	}
-	return t.db.Txns().Put(nil, "", 0, 0, time.Time{}, false)
+
+	hash, err := chainhash.NewHashFromStr(txn.Txid)
+	if err != nil {
+		return err
+	}
+
+	// Check to see if we've already processed this tx.
+	if existing, err := t.db.Txns().Get(*hash); err != nil {
+		// TODO: Don't assume that any error means "not found"
+		// TODO: Calculate the value here
+		// TODO: Calculate watchOnly here
+		// Not found
+		value := int(0)
+		watchOnly := false
+		t.db.Txns().Put(raw, hash.String(), value, txn.BlockHeight, time.Unix(txn.Time, 0), watchOnly)
+	} else {
+		// We've already processed this txn
+		// TODO: Check if existing spendheight was 0
+		// TODO: Figure out new height and update txn and stxos
+	}
+
+	return nil
 }
 
 // validTxn validates a transaction based on rules from zcash protocol spec,

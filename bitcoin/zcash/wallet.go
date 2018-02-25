@@ -128,7 +128,9 @@ func (w *Wallet) watchTransactions() {
 				return
 			}
 			if err := w.ingest(txn); err != nil {
-				log.Error(err)
+				log.Errorf("error fetching transaction %v: %v", txn.Txid, err)
+			} else {
+				log.Debugf("fetched transaction %v", txn.Txid)
 			}
 		}
 	}
