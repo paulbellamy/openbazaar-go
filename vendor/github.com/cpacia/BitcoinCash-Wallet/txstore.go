@@ -347,7 +347,9 @@ func (ts *TxStore) Ingest(tx *wire.MsgTx, height int32) (uint32, error) {
 			cb.Value = value
 			txn.Timestamp = time.Now()
 			shouldCallback = true
-			ts.Txns().Put(tx, int(value), int(height), txn.Timestamp, hits == 0)
+			var buf bytes.Buffer
+			tx.BtcEncode(&buf, wire.ProtocolVersion, wire.WitnessEncoding)
+			ts.Txns().Put(buf.Bytes(), tx.TxHash().String(), int(value), int(height), txn.Timestamp, hits == 0)
 			ts.txids[tx.TxHash().String()] = height
 		}
 		// Let's check the height before committing so we don't allow rogue peers to send us a lose

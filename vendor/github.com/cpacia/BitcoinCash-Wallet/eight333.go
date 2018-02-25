@@ -1,10 +1,12 @@
 package bitcoincash
 
 import (
+	"bytes"
+	"time"
+
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/peer"
 	"github.com/btcsuite/btcd/wire"
-	"time"
 )
 
 var (
@@ -187,11 +189,13 @@ func (w *SPVWallet) onGetData(p *peer.Peer, m *wire.MsgGetData) {
 	var sent int32
 	for _, thing := range m.InvList {
 		if thing.Type == wire.InvTypeTx {
-			tx, _, err := w.txstore.Txns().Get(thing.Hash)
+			raw, _, err := w.txstore.Txns().Get(thing.Hash)
 			if err != nil {
 				log.Errorf("Error getting tx %s: %s", thing.Hash.String(), err.Error())
 				continue
 			}
+			tx := wire.NewMsgTx(1)
+			tx.BtcDecode(bytes.NewReader(raw), wire.ProtocolVersion, wire.WitnessEncoding)
 			p.QueueMessageWithEncoding(tx, nil, wire.WitnessEncoding)
 			sent++
 			continue
