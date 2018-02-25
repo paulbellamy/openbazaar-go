@@ -341,7 +341,7 @@ func (ts *TxStore) Ingest(tx *wire.MsgTx, height int32) (uint32, error) {
 	// If hits is nonzero it's a relevant tx and we should store it
 	if hits > 0 || matchesWatchOnly {
 		ts.cbMutex.Lock()
-		_, txn, err := ts.Txns().Get(tx.TxHash())
+		txn, err := ts.Txns().Get(tx.TxHash())
 		shouldCallback := false
 		if err != nil {
 			cb.Value = value

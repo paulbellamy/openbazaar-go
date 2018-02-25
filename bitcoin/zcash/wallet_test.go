@@ -374,7 +374,7 @@ func TestWalletTransactionsInitialLoad(t *testing.T) {
 			},
 		},
 		txns: &FakeTxns{
-			put: func(txn *wire.MsgTx, value, height int, timestamp time.Time, watchOnly bool) error {
+			put: func(txn []byte, txid string, value, height int, timestamp time.Time, watchOnly bool) error {
 				return nil
 			},
 			getAll: func(includeWatchOnly bool) ([]wallet.Txn, error) {

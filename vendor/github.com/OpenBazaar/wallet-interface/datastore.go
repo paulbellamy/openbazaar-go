@@ -46,7 +46,7 @@ type Txns interface {
 	Put(txn []byte, txid string, value, height int, timestamp time.Time, watchOnly bool) error
 
 	// Fetch a raw tx and it's metadata given a hash
-	Get(txid chainhash.Hash) ([]byte, Txn, error)
+	Get(txid chainhash.Hash) (Txn, error)
 
 	// Fetch all transactions from the db
 	GetAll(includeWatchOnly bool) ([]Txn, error)

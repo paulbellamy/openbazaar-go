@@ -7,7 +7,6 @@ import (
 	wallet "github.com/OpenBazaar/wallet-interface"
 	"github.com/btcsuite/btcd/btcec"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
-	"github.com/btcsuite/btcd/wire"
 	"github.com/btcsuite/btcutil"
 )
 
@@ -202,23 +201,23 @@ func (f *FakeStxos) Delete(stxo wallet.Stxo) error {
 }
 
 type FakeTxns struct {
-	put          func(txn *wire.MsgTx, value, height int, timestamp time.Time, watchOnly bool) error
-	get          func(txid chainhash.Hash) (*wire.MsgTx, wallet.Txn, error)
+	put          func(txn []byte, txid string, value, height int, timestamp time.Time, watchOnly bool) error
+	get          func(txid chainhash.Hash) (wallet.Txn, error)
 	getAll       func(includeWatchOnly bool) ([]wallet.Txn, error)
 	updateHeight func(txid chainhash.Hash, height int) error
 	delete       func(txid *chainhash.Hash) error
 }
 
 // Put a new transaction to the database
-func (f *FakeTxns) Put(txn *wire.MsgTx, value, height int, timestamp time.Time, watchOnly bool) error {
+func (f *FakeTxns) Put(txn []byte, txid string, value, height int, timestamp time.Time, watchOnly bool) error {
 	if f.put == nil {
 		panic("not implemented")
 	}
-	return f.put(txn, value, height, timestamp, watchOnly)
+	return f.put(txn, txid, value, height, timestamp, watchOnly)
 }
 
 // Fetch a raw tx and it's metadata given a hash
-func (f *FakeTxns) Get(txid chainhash.Hash) (*wire.MsgTx, wallet.Txn, error) {
+func (f *FakeTxns) Get(txid chainhash.Hash) (wallet.Txn, error) {
 	if f.get == nil {
 		panic("not implemented")
 	}

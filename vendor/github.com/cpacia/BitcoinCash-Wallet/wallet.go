@@ -10,16 +10,16 @@ import (
 	btc "github.com/btcsuite/btcutil"
 	hd "github.com/btcsuite/btcutil/hdkeychain"
 	"github.com/btcsuite/btcwallet/wallet/txrules"
+	"github.com/cpacia/bchutil"
 	"github.com/op/go-logging"
 	b39 "github.com/tyler-smith/go-bip39"
 	"io"
 	"sync"
 	"time"
-	"github.com/cpacia/bchutil"
 )
 
 func setupNetworkParams(params *chaincfg.Params) {
-	switch(params.Name){
+	switch params.Name {
 	case chaincfg.MainNetParams.Name:
 		params.Net = bchutil.MainnetMagic
 	case chaincfg.TestNet3Params.Name:
@@ -28,7 +28,6 @@ func setupNetworkParams(params *chaincfg.Params) {
 		params.Net = bchutil.Regtestmagic
 	}
 }
-
 
 type SPVWallet struct {
 	params *chaincfg.Params
@@ -345,12 +344,12 @@ func (w *SPVWallet) Transactions() ([]wallet.Txn, error) {
 }
 
 func (w *SPVWallet) GetTransaction(txid chainhash.Hash) (wallet.Txn, error) {
-	_, txn, err := w.txstore.Txns().Get(txid)
+	txn, err := w.txstore.Txns().Get(txid)
 	return txn, err
 }
 
 func (w *SPVWallet) GetConfirmations(txid chainhash.Hash) (uint32, uint32, error) {
-	_, txn, err := w.txstore.Txns().Get(txid)
+	txn, err := w.txstore.Txns().Get(txid)
 	if err != nil {
 		return 0, 0, err
 	}
