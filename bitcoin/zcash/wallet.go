@@ -265,8 +265,10 @@ func (w *Wallet) GetTransaction(txid chainhash.Hash) (wallet.Txn, error) {
 }
 
 // Get the height and best hash of the blockchain
+// TODO: Implement this
 func (w *Wallet) ChainTip() (uint32, chainhash.Hash) {
-	panic("not implemented")
+	var ch chainhash.Hash
+	return 0, ch
 }
 
 // Get the current fee per byte
@@ -320,13 +322,13 @@ func (w *Wallet) AddWatchedScript(script []byte) error {
 }
 
 // Add a callback for incoming transactions
+// TODO: Implement this
 func (w *Wallet) AddTransactionListener(func(wallet.TransactionCallback)) {
-	panic("not implemented")
 }
 
 // Use this to re-download merkle blocks in case of missed transactions
+// TODO: Implement this
 func (w *Wallet) ReSyncBlockchain(fromTime time.Time) {
-	panic("not implemented")
 }
 
 // Return the number of confirmations and the height for a transaction
