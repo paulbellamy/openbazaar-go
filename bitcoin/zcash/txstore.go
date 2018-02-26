@@ -56,6 +56,12 @@ func (t *txStore) Ingest(txn client.Transaction, raw []byte) error {
 		// Update utxos, and calculate value
 		value := t.storeUtxos(txn, hash)
 
+		v2, err := t.storeStxos(txn, hash)
+		if err != nil {
+			log.Errorf("unable to store stxos for %v: %v", txn.Txid, err)
+		}
+		value += v2
+
 		// Store the transaction
 		watchOnly := false
 		t.db.Txns().Put(raw, hash.String(), value, txn.BlockHeight, time.Unix(txn.Time, 0), watchOnly)
@@ -129,19 +135,38 @@ func (t *txStore) storeUtxos(txn client.Transaction, hash *chainhash.Hash) int {
 	return value
 }
 
-func insightToWire(txn client.Transaction) *wire.MsgTx {
-	wireTx := wire.NewMsgTx(int32(txn.Version))
-	for range txn.Inputs {
-		hash, _ := chainhash.NewHashFromStr("")
-		index := uint32(0)
-		signatureScript := []byte{}
-		witness := [][]byte{}
-		txIn := wire.NewTxIn(
-			wire.NewOutPoint(hash, index),
-			signatureScript,
-			witness,
-		)
-		wireTx.AddTxIn(txIn)
+// TODO: Update existing stxo height, if it already exists.
+func (t *txStore) storeStxos(txn client.Transaction, hash *chainhash.Hash) (int, error) {
+	utxos, err := t.db.Utxos().GetAll()
+	if err != nil {
+		return 0, err
 	}
-	return wireTx
+
+	var value int
+	for _, input := range txn.Inputs {
+		for i, u := range utxos {
+			if input.Txid != u.Op.Hash.String() || uint32(input.Vout) != u.Op.Index {
+				continue
+			}
+			err = t.db.Stxos().Put(wallet.Stxo{
+				Utxo:        u,
+				SpendHeight: int32(txn.BlockHeight),
+				SpendTxid:   *hash,
+			})
+			if err != nil {
+				log.Errorf("could save stxo: %v", err)
+			}
+			err = t.db.Utxos().Delete(u)
+			if err != nil {
+				log.Errorf("could delete utxo: %v", err)
+			}
+			// We're done with this utxo, no need to check it again.
+			utxos = append(utxos[:i], utxos[i+1:]...)
+			if !u.WatchOnly {
+				value -= int(u.Value)
+			}
+			break
+		}
+	}
+	return value, nil
 }
