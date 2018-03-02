@@ -35,14 +35,8 @@ func testConfig(t *testing.T) Config {
 		Params:      &chaincfg.TestNet3Params,
 		RepoPath:    "",
 		TrustedPeer: "",
-		DB: &FakeDatastore{
-			keys: &FakeKeystore{
-				getLookaheadWindows: func() map[wallet.KeyPurpose]int {
-					return map[wallet.KeyPurpose]int{wallet.EXTERNAL: keys.LOOKAHEADWINDOW}
-				},
-			},
-		},
-		Proxy: nil,
+		DB:          &FakeDatastore{},
+		Proxy:       nil,
 	}
 }
 
@@ -134,15 +128,6 @@ func TestWalletCurrentAddress(t *testing.T) {
 	// Derive the first unused key's address
 	_, external, _ := keys.Bip44Derivation(mPrivKey, keys.Zcash)
 	externalChild, _ := external.Child(0)
-	// Setup the keystore so the first key is unused.
-	config.DB = &FakeDatastore{
-		keys: &FakeKeystore{
-			getUnused: func(p wallet.KeyPurpose) ([]int, error) { return []int{0}, nil },
-			getLookaheadWindows: func() map[wallet.KeyPurpose]int {
-				return map[wallet.KeyPurpose]int{wallet.EXTERNAL: keys.LOOKAHEADWINDOW}
-			},
-		},
-	}
 	w, err := NewWallet(config)
 	if err != nil {
 		t.Fatal(err)
@@ -174,17 +159,10 @@ func TestWalletNewAddress(t *testing.T) {
 	config := testConfig(t)
 	// markKeyAsUsed, should modify the output of getLastKeyIndex
 	unused := 0
-	config.DB = &FakeDatastore{
-		keys: &FakeKeystore{
-			put: func(hash160 []byte, keyPath wallet.KeyPath) error { return nil },
-			markKeyAsUsed: func(scriptAddress []byte) error {
-				unused++
-				return nil
-			},
-			getLastKeyIndex: func(p wallet.KeyPurpose) (int, bool, error) { return unused, false, nil },
-			getLookaheadWindows: func() map[wallet.KeyPurpose]int {
-				return map[wallet.KeyPurpose]int{wallet.EXTERNAL: keys.LOOKAHEADWINDOW}
-			},
+	config.DB.(*FakeDatastore).keys = &FakeKeys{
+		markKeyAsUsed: func(scriptAddress []byte) error {
+			unused++
+			return nil
 		},
 	}
 	w, err := NewWallet(config)
@@ -304,34 +282,19 @@ func TestWalletDecodeAddress(t *testing.T) {
 // TODO: test unconfirmed
 func TestWalletBalance(t *testing.T) {
 	config := testConfig(t)
-	db := config.DB.(*FakeDatastore)
-
 	hash1, _ := chainhash.NewHashFromStr("a")
 	hash2, _ := chainhash.NewHashFromStr("b")
-	db.utxos = &FakeUtxos{
-		getAll: func() ([]wallet.Utxo, error) {
-			return []wallet.Utxo{
-				{
-					Op:       wire.OutPoint{Hash: *hash1},
-					AtHeight: 4, // Confirmed
-					Value:    1,
-				},
-				{
-					Op:       wire.OutPoint{Hash: *hash2},
-					AtHeight: 0, // Unconfirmed
-					Value:    2,
-				},
-			}, nil
-		},
-	}
-	db.stxos = &FakeStxos{
-		getAll: func() ([]wallet.Stxo, error) {
-			return []wallet.Stxo{
-				// Confirm the first txn
-				{SpendHeight: 4, SpendTxid: *hash1},
-			}, nil
-		},
-	}
+	config.DB.Utxos().Put(wallet.Utxo{
+		Op:       wire.OutPoint{Hash: *hash1},
+		AtHeight: 4, // Confirmed
+		Value:    1,
+	})
+	config.DB.Utxos().Put(wallet.Utxo{
+		Op:       wire.OutPoint{Hash: *hash2},
+		AtHeight: 0, // Unconfirmed
+		Value:    2,
+	})
+	config.DB.Stxos().Put(wallet.Stxo{SpendHeight: 4, SpendTxid: *hash1})
 	w, err := NewWallet(config)
 	if err != nil {
 		t.Fatal(err)
@@ -348,7 +311,6 @@ func TestWalletBalance(t *testing.T) {
 	}
 }
 
-// TODO: Test initial load of transactions
 // TODO: Test ongoing transactions
 // TODO: Test race condition of transactions coming in after initial load
 func TestWalletTransactionsInitialLoad(t *testing.T) {
@@ -365,26 +327,7 @@ func TestWalletTransactionsInitialLoad(t *testing.T) {
 	}
 	config := testConfig(t)
 	expectedTxns := []wallet.Txn{{Txid: "a"}}
-	config.DB = &FakeDatastore{
-		keys: &FakeKeystore{
-			put: func(hash160 []byte, keyPath wallet.KeyPath) error { return nil },
-			getAll: func() ([]wallet.KeyPath, error) {
-				return []wallet.KeyPath{{wallet.EXTERNAL, 0}}, nil
-			},
-			getLastKeyIndex: func(p wallet.KeyPurpose) (int, bool, error) { return 0, false, nil },
-			getLookaheadWindows: func() map[wallet.KeyPurpose]int {
-				return map[wallet.KeyPurpose]int{wallet.EXTERNAL: keys.LOOKAHEADWINDOW}
-			},
-		},
-		txns: &FakeTxns{
-			put: func(txn []byte, txid string, value, height int, timestamp time.Time, watchOnly bool) error {
-				return nil
-			},
-			getAll: func(includeWatchOnly bool) ([]wallet.Txn, error) {
-				return expectedTxns, nil
-			},
-		},
-	}
+	config.DB.Txns().Put(nil, expectedTxns[0].Txid, 0, 0, time.Time{}, false)
 	w, err := NewWallet(config)
 	if err != nil {
 		t.Fatal(err)

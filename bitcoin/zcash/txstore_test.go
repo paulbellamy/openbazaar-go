@@ -2,9 +2,7 @@ package zcash
 
 import (
 	"encoding/hex"
-	"fmt"
 	"testing"
-	"time"
 
 	"github.com/OpenBazaar/multiwallet/client"
 	"github.com/OpenBazaar/multiwallet/keys"
@@ -16,41 +14,14 @@ import (
 )
 
 func TestTxStoreIngestAddsTxnsToDB(t *testing.T) {
-	// TODO: This setup/stubbing is getting onerous. Refactor it out.
-	var txns []wallet.Txn
-	db := &FakeDatastore{
-		utxos: &FakeUtxos{
-			put:    func(utxo wallet.Utxo) error { return nil },
-			getAll: func() ([]wallet.Utxo, error) { return nil, nil },
-		},
-		txns: &FakeTxns{
-			get: func(txid chainhash.Hash) (wallet.Txn, error) {
-				return wallet.Txn{}, fmt.Errorf("not found")
-			},
-			put: func(txn []byte, txid string, value, height int, timestamp time.Time, watchOnly bool) error {
-				txns = append(txns, wallet.Txn{})
-				return nil
-			},
-		},
-		keys: &FakeKeystore{
-			getAll: func() ([]wallet.KeyPath, error) {
-				return []wallet.KeyPath{{wallet.EXTERNAL, 0}}, nil
-			},
-			getLastKeyIndex: func(p wallet.KeyPurpose) (int, bool, error) { return 0, false, nil },
-			getLookaheadWindows: func() map[wallet.KeyPurpose]int {
-				return map[wallet.KeyPurpose]int{wallet.EXTERNAL: keys.LOOKAHEADWINDOW}
-			},
-			markKeyAsUsed: func(scriptAddress []byte) error { return nil },
-		},
-	}
 	config := testConfig(t)
 	seed := b39.NewSeed(config.Mnemonic, "")
 	mPrivKey, _ := hd.NewMaster(seed, config.Params)
-	keyManager, err := keys.NewKeyManager(db.Keys(), config.Params, mPrivKey, keys.Zcash)
+	keyManager, err := keys.NewKeyManager(config.DB.Keys(), config.Params, mPrivKey, keys.Zcash)
 	if err != nil {
 		t.Fatal(err)
 	}
-	txStore, err := NewTxStore(config.Params, db, keyManager)
+	txStore, err := NewTxStore(config.Params, config.DB, keyManager)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,50 +36,24 @@ func TestTxStoreIngestAddsTxnsToDB(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	txns, err := config.DB.Txns().GetAll(true)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(txns) != 1 {
 		t.Errorf("Expected 1 txn, got: %d", len(txns))
 	}
 }
 
 func TestTxStoreIngestIgnoresDuplicates(t *testing.T) {
-	var txns []wallet.Txn
-	db := &FakeDatastore{
-		utxos: &FakeUtxos{
-			getAll: func() ([]wallet.Utxo, error) { return nil, nil },
-		},
-		txns: &FakeTxns{
-			get: func(txid chainhash.Hash) (wallet.Txn, error) {
-				for _, txn := range txns {
-					if txn.Txid == txid.String() {
-						return txn, nil
-					}
-				}
-				return wallet.Txn{}, fmt.Errorf("not found")
-			},
-			put: func(txn []byte, txid string, value, height int, timestamp time.Time, watchOnly bool) error {
-				txns = append(txns, wallet.Txn{Txid: txid})
-				return nil
-			},
-		},
-		keys: &FakeKeystore{
-			getAll: func() ([]wallet.KeyPath, error) {
-				return []wallet.KeyPath{{wallet.EXTERNAL, 0}}, nil
-			},
-			getLastKeyIndex: func(p wallet.KeyPurpose) (int, bool, error) { return 0, false, nil },
-			getLookaheadWindows: func() map[wallet.KeyPurpose]int {
-				return map[wallet.KeyPurpose]int{wallet.EXTERNAL: keys.LOOKAHEADWINDOW}
-			},
-			markKeyAsUsed: func(scriptAddress []byte) error { return nil },
-		},
-	}
 	config := testConfig(t)
 	seed := b39.NewSeed(config.Mnemonic, "")
 	mPrivKey, _ := hd.NewMaster(seed, config.Params)
-	keyManager, err := keys.NewKeyManager(db.Keys(), config.Params, mPrivKey, keys.Zcash)
+	keyManager, err := keys.NewKeyManager(config.DB.Keys(), config.Params, mPrivKey, keys.Zcash)
 	if err != nil {
 		t.Fatal(err)
 	}
-	txStore, err := NewTxStore(config.Params, db, keyManager)
+	txStore, err := NewTxStore(config.Params, config.DB, keyManager)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,6 +71,10 @@ func TestTxStoreIngestIgnoresDuplicates(t *testing.T) {
 		}
 	}
 
+	txns, err := config.DB.Txns().GetAll(true)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(txns) != 1 {
 		t.Errorf("Expected 1 txn, got: %d", len(txns))
 	}
@@ -175,46 +124,21 @@ func TestTxStoreIngestRejectsInvalidTxns(t *testing.T) {
 }
 
 func TestTxStoreIngestUpdatesUtxos(t *testing.T) {
-	var utxos []wallet.Utxo
-	var usedKeys []string
-	db := &FakeDatastore{
-		utxos: &FakeUtxos{
-			put: func(utxo wallet.Utxo) error {
-				utxos = append(utxos, utxo)
-				return nil
-			},
-			getAll: func() ([]wallet.Utxo, error) { return utxos, nil },
-		},
-		txns: &FakeTxns{
-			get: func(txid chainhash.Hash) (wallet.Txn, error) {
-				return wallet.Txn{}, fmt.Errorf("not found")
-			},
-			put: func(txn []byte, txid string, value, height int, timestamp time.Time, watchOnly bool) error {
-				return nil
-			},
-		},
-		keys: &FakeKeystore{
-			getAll: func() ([]wallet.KeyPath, error) {
-				return []wallet.KeyPath{{wallet.EXTERNAL, 0}}, nil
-			},
-			getLastKeyIndex: func(p wallet.KeyPurpose) (int, bool, error) { return 0, false, nil },
-			getLookaheadWindows: func() map[wallet.KeyPurpose]int {
-				return map[wallet.KeyPurpose]int{wallet.EXTERNAL: keys.LOOKAHEADWINDOW}
-			},
-			markKeyAsUsed: func(scriptAddress []byte) error {
-				usedKeys = append(usedKeys, string(scriptAddress))
-				return nil
-			},
+	var usedKeys int
+	config := testConfig(t)
+	config.DB.(*FakeDatastore).keys = &FakeKeys{
+		markKeyAsUsed: func(scriptAddress []byte) error {
+			usedKeys++
+			return nil
 		},
 	}
-	config := testConfig(t)
 	seed := b39.NewSeed(config.Mnemonic, "")
 	mPrivKey, _ := hd.NewMaster(seed, config.Params)
-	keyManager, err := keys.NewKeyManager(db.Keys(), config.Params, mPrivKey, keys.Zcash)
+	keyManager, err := keys.NewKeyManager(config.DB.Keys(), config.Params, mPrivKey, keys.Zcash)
 	if err != nil {
 		t.Fatal(err)
 	}
-	txStore, err := NewTxStore(config.Params, db, keyManager)
+	txStore, err := NewTxStore(config.Params, config.DB, keyManager)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -244,71 +168,28 @@ func TestTxStoreIngestUpdatesUtxos(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	utxos, err := config.DB.Utxos().GetAll()
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(utxos) != 1 {
 		t.Errorf("Expected 1 utxo, got: %d", len(utxos))
 	}
 
-	if len(usedKeys) != 1 {
+	if usedKeys != 1 {
 		t.Errorf("Expected to mark key as used")
 	}
 }
 
 func TestTxStoreIngestUpdatesStxos(t *testing.T) {
-	utxos := map[string]wallet.Utxo{}
-	var stxos []wallet.Stxo
-	var txns []wallet.Txn
-	db := &FakeDatastore{
-		utxos: &FakeUtxos{
-			put: func(utxo wallet.Utxo) error {
-				utxos[utxo.Op.String()] = utxo
-				return nil
-			},
-			delete: func(needle wallet.Utxo) error {
-				delete(utxos, needle.Op.String())
-				return nil
-			},
-			getAll: func() ([]wallet.Utxo, error) {
-				var us []wallet.Utxo
-				for _, u := range utxos {
-					us = append(us, u)
-				}
-				return us, nil
-			},
-		},
-		stxos: &FakeStxos{
-			put: func(stxo wallet.Stxo) error {
-				stxos = append(stxos, stxo)
-				return nil
-			},
-		},
-		txns: &FakeTxns{
-			get: func(txid chainhash.Hash) (wallet.Txn, error) {
-				return wallet.Txn{}, fmt.Errorf("not found")
-			},
-			put: func(txn []byte, txid string, value, height int, timestamp time.Time, watchOnly bool) error {
-				txns = append(txns, wallet.Txn{Value: int64(value)})
-				return nil
-			},
-		},
-		keys: &FakeKeystore{
-			getAll: func() ([]wallet.KeyPath, error) {
-				return []wallet.KeyPath{{wallet.EXTERNAL, 0}}, nil
-			},
-			getLastKeyIndex: func(p wallet.KeyPurpose) (int, bool, error) { return 0, false, nil },
-			getLookaheadWindows: func() map[wallet.KeyPurpose]int {
-				return map[wallet.KeyPurpose]int{wallet.EXTERNAL: keys.LOOKAHEADWINDOW}
-			},
-			markKeyAsUsed: func(scriptAddress []byte) error { return nil },
-		},
-	}
 	config := testConfig(t)
 	seed := b39.NewSeed(config.Mnemonic, "")
 	mPrivKey, _ := hd.NewMaster(seed, config.Params)
-	keyManager, err := keys.NewKeyManager(db.Keys(), config.Params, mPrivKey, keys.Zcash)
+	keyManager, err := keys.NewKeyManager(config.DB.Keys(), config.Params, mPrivKey, keys.Zcash)
 	if err != nil {
 		t.Fatal(err)
 	}
-	txStore, err := NewTxStore(config.Params, db, keyManager)
+	txStore, err := NewTxStore(config.Params, config.DB, keyManager)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -337,7 +218,7 @@ func TestTxStoreIngestUpdatesStxos(t *testing.T) {
 		ScriptPubkey: scriptBytes,
 		WatchOnly:    false,
 	}
-	db.Utxos().Put(receivedUtxo)
+	config.DB.Utxos().Put(receivedUtxo)
 
 	// Ingest the stxo-containing txn
 	txn := client.Transaction{
@@ -373,14 +254,31 @@ func TestTxStoreIngestUpdatesStxos(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	stxos, err := config.DB.Stxos().GetAll()
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(stxos) != 1 {
 		t.Fatalf("Expected 1 stxo, got: %v", stxos)
 	}
 	if stxos[0].SpendHeight != 5 {
 		t.Errorf("Expected stxo height to be updated, got: %d", stxos[0].SpendHeight)
 	}
-	if _, ok := utxos[receivedUtxo.Op.String()]; ok {
-		t.Errorf("Expected matching utxo to have been removed")
+
+	utxos, err := config.DB.Utxos().GetAll()
+	if err != nil {
+		t.Error(err)
+	}
+	for _, u := range utxos {
+		if u.Op.String() == receivedUtxo.Op.String() {
+			t.Errorf("Expected matching utxo to have been removed")
+			break
+		}
+	}
+
+	txns, err := config.DB.Txns().GetAll(true)
+	if err != nil {
+		t.Fatal(err)
 	}
 	if len(txns) != 1 {
 		t.Fatalf("Expected 1 txn, got: %d", len(txns))

@@ -1,6 +1,12 @@
 package zcash
 
 import (
+	"bytes"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"sort"
+	"sync"
 	"time"
 
 	"github.com/OpenBazaar/multiwallet/client"
@@ -18,234 +24,317 @@ type FakeDatastore struct {
 	watchedScripts wallet.WatchedScripts
 }
 
-func (f *FakeDatastore) Utxos() wallet.Utxos                   { return f.utxos }
-func (f *FakeDatastore) Stxos() wallet.Stxos                   { return f.stxos }
-func (f *FakeDatastore) Txns() wallet.Txns                     { return f.txns }
-func (f *FakeDatastore) Keys() wallet.Keys                     { return f.keys }
-func (f *FakeDatastore) WatchedScripts() wallet.WatchedScripts { return f.watchedScripts }
-
-type FakeKeystore struct {
-	put                 func(hash160 []byte, keyPath wallet.KeyPath) error
-	importKey           func(scriptAddress []byte, key *btcec.PrivateKey) error
-	markKeyAsUsed       func(scriptAddress []byte) error
-	getLastKeyIndex     func(purpose wallet.KeyPurpose) (int, bool, error)
-	getPathForKey       func(scriptAddress []byte) (wallet.KeyPath, error)
-	getKey              func(scriptAddress []byte) (*btcec.PrivateKey, error)
-	getImported         func() ([]*btcec.PrivateKey, error)
-	getUnused           func(purpose wallet.KeyPurpose) ([]int, error)
-	getAll              func() ([]wallet.KeyPath, error)
-	getLookaheadWindows func() map[wallet.KeyPurpose]int
+func (f *FakeDatastore) Utxos() wallet.Utxos {
+	if f.utxos == nil {
+		f.utxos = &FakeUtxos{}
+	}
+	return f.utxos
 }
 
-// Put a bip32 key to the database
-func (f *FakeKeystore) Put(hash160 []byte, keyPath wallet.KeyPath) error {
-	if f.put == nil {
-		panic("not implemented")
+func (f *FakeDatastore) Stxos() wallet.Stxos {
+	if f.stxos == nil {
+		f.stxos = &FakeStxos{}
 	}
-	return f.put(hash160, keyPath)
+	return f.stxos
 }
 
-// Import a loose private key not part of the keychain
-func (f *FakeKeystore) ImportKey(scriptAddress []byte, key *btcec.PrivateKey) error {
-	if f.importKey == nil {
-		panic("not implemented")
+func (f *FakeDatastore) Txns() wallet.Txns {
+	if f.txns == nil {
+		f.txns = &FakeTxns{}
 	}
-	return f.importKey(scriptAddress, key)
+	return f.txns
 }
 
-// Mark the script as used
-func (f *FakeKeystore) MarkKeyAsUsed(scriptAddress []byte) error {
-	if f.markKeyAsUsed == nil {
-		panic("not implemented")
+func (f *FakeDatastore) Keys() wallet.Keys {
+	if f.keys == nil {
+		f.keys = &FakeKeys{}
 	}
-	return f.markKeyAsUsed(scriptAddress)
+	return f.keys
 }
 
-// Fetch the last index for the given key purpose
-// The bool should state whether the key has been used or not
-func (f *FakeKeystore) GetLastKeyIndex(purpose wallet.KeyPurpose) (int, bool, error) {
-	if f.getLastKeyIndex == nil {
-		panic("not implemented")
-	}
-	return f.getLastKeyIndex(purpose)
+func (f *FakeDatastore) WatchedScripts() wallet.WatchedScripts { panic("not implemented") }
+
+type keyStoreEntry struct {
+	scriptAddress []byte
+	path          wallet.KeyPath
+	used          bool
+	key           *btcec.PrivateKey
 }
 
-// Returns the first unused path for the given purpose
-func (f *FakeKeystore) GetPathForKey(scriptAddress []byte) (wallet.KeyPath, error) {
-	if f.getPathForKey == nil {
-		panic("not implemented")
-	}
-	return f.GetPathForKey(scriptAddress)
+type FakeKeys struct {
+	sync.Once
+	keys          map[string]*keyStoreEntry
+	markKeyAsUsed func(scriptAddress []byte) error
 }
 
-// Returns an imported private key given a script address
-func (f *FakeKeystore) GetKey(scriptAddress []byte) (*btcec.PrivateKey, error) {
-	if f.getKey == nil {
-		panic("not implemented")
+func (m *FakeKeys) init() {
+	if m.keys == nil {
+		m.keys = make(map[string]*keyStoreEntry)
 	}
-	return f.getKey(scriptAddress)
 }
 
-// Returns all imported keys
-func (f *FakeKeystore) GetImported() ([]*btcec.PrivateKey, error) {
-	if f.getImported == nil {
-		panic("not implemented")
-	}
-	return f.getImported()
+func (m *FakeKeys) Put(scriptAddress []byte, keyPath wallet.KeyPath) error {
+	m.Do(m.init)
+	m.keys[hex.EncodeToString(scriptAddress)] = &keyStoreEntry{scriptAddress, keyPath, false, nil}
+	return nil
 }
 
-// Get a list of unused key indexes for the given purpose
-func (f *FakeKeystore) GetUnused(purpose wallet.KeyPurpose) ([]int, error) {
-	if f.getUnused == nil {
-		panic("not implemented")
-	}
-	return f.getUnused(purpose)
+func (m *FakeKeys) ImportKey(scriptAddress []byte, key *btcec.PrivateKey) error {
+	m.Do(m.init)
+	kp := wallet.KeyPath{Purpose: wallet.EXTERNAL, Index: -1}
+	m.keys[hex.EncodeToString(scriptAddress)] = &keyStoreEntry{scriptAddress, kp, false, key}
+	return nil
 }
 
-// Fetch all key paths
-func (f *FakeKeystore) GetAll() ([]wallet.KeyPath, error) {
-	if f.getAll == nil {
-		panic("not implemented")
+func (m *FakeKeys) MarkKeyAsUsed(scriptAddress []byte) error {
+	m.Do(m.init)
+	if m.markKeyAsUsed != nil {
+		return m.markKeyAsUsed(scriptAddress)
 	}
-	return f.getAll()
+	key, ok := m.keys[hex.EncodeToString(scriptAddress)]
+	if !ok {
+		return errors.New("key does not exist")
+	}
+	key.used = true
+	return nil
 }
 
-// Get the number of unused keys following the last used key
-// for each key purpose.
-func (f *FakeKeystore) GetLookaheadWindows() map[wallet.KeyPurpose]int {
-	if f.getLookaheadWindows == nil {
-		panic("not implemented")
+func (m *FakeKeys) GetLastKeyIndex(purpose wallet.KeyPurpose) (int, bool, error) {
+	m.Do(m.init)
+	i := -1
+	used := false
+	for _, key := range m.keys {
+		if key.path.Purpose == purpose && key.path.Index > i {
+			i = key.path.Index
+			used = key.used
+		}
 	}
-	return f.getLookaheadWindows()
+	if i == -1 {
+		return i, used, errors.New("No saved keys")
+	}
+	return i, used, nil
+}
+
+func (m *FakeKeys) GetPathForKey(scriptAddress []byte) (wallet.KeyPath, error) {
+	m.Do(m.init)
+	key, ok := m.keys[hex.EncodeToString(scriptAddress)]
+	if !ok || key.path.Index == -1 {
+		return wallet.KeyPath{}, errors.New("key does not exist")
+	}
+	return key.path, nil
+}
+
+func (m *FakeKeys) GetKey(scriptAddress []byte) (*btcec.PrivateKey, error) {
+	m.Do(m.init)
+	for _, k := range m.keys {
+		if k.path.Index == -1 && bytes.Equal(scriptAddress, k.scriptAddress) {
+			return k.key, nil
+		}
+	}
+	return nil, errors.New("Not found")
+}
+
+func (m *FakeKeys) GetImported() ([]*btcec.PrivateKey, error) {
+	m.Do(m.init)
+	var keys []*btcec.PrivateKey
+	for _, k := range m.keys {
+		if k.path.Index == -1 {
+			keys = append(keys, k.key)
+		}
+	}
+	return keys, nil
+}
+
+func (m *FakeKeys) GetUnused(purpose wallet.KeyPurpose) ([]int, error) {
+	m.Do(m.init)
+	var i []int
+	for _, key := range m.keys {
+		if !key.used && key.path.Purpose == purpose {
+			i = append(i, key.path.Index)
+		}
+	}
+	sort.Ints(i)
+	return i, nil
+}
+
+func (m *FakeKeys) GetAll() ([]wallet.KeyPath, error) {
+	m.Do(m.init)
+	var kp []wallet.KeyPath
+	for _, key := range m.keys {
+		kp = append(kp, key.path)
+	}
+	return kp, nil
+}
+
+func (m *FakeKeys) GetLookaheadWindows() map[wallet.KeyPurpose]int {
+	m.Do(m.init)
+	internalLastUsed := -1
+	externalLastUsed := -1
+	for _, key := range m.keys {
+		if key.path.Purpose == wallet.INTERNAL && key.used && key.path.Index > internalLastUsed {
+			internalLastUsed = key.path.Index
+		}
+		if key.path.Purpose == wallet.EXTERNAL && key.used && key.path.Index > externalLastUsed {
+			externalLastUsed = key.path.Index
+		}
+	}
+	internalUnused := 0
+	externalUnused := 0
+	for _, key := range m.keys {
+		if key.path.Purpose == wallet.INTERNAL && !key.used && key.path.Index > internalLastUsed {
+			internalUnused++
+		}
+		if key.path.Purpose == wallet.EXTERNAL && !key.used && key.path.Index > externalLastUsed {
+			externalUnused++
+		}
+	}
+	mp := make(map[wallet.KeyPurpose]int)
+	mp[wallet.INTERNAL] = internalUnused
+	mp[wallet.EXTERNAL] = externalUnused
+	return mp
 }
 
 type FakeUtxos struct {
-	// Put a utxo to the database
-	put func(utxo wallet.Utxo) error
+	sync.Once
+	utxos map[string]wallet.Utxo
+}
 
-	// Fetch all utxos from the db
-	getAll func() ([]wallet.Utxo, error)
-
-	// Make a utxo unspendable
-	setWatchOnly func(utxo wallet.Utxo) error
-
-	// Delete a utxo from the db
-	delete func(utxo wallet.Utxo) error
+func (f *FakeUtxos) init() {
+	if f.utxos == nil {
+		f.utxos = make(map[string]wallet.Utxo)
+	}
 }
 
 // Put a utxo to the database
 func (f *FakeUtxos) Put(utxo wallet.Utxo) error {
-	if f.put == nil {
-		panic("not implemented")
-	}
-	return f.put(utxo)
+	f.Do(f.init)
+	f.utxos[utxo.Op.String()] = utxo
+	return nil
 }
 
 // Fetch all utxos from the db
-func (f *FakeUtxos) GetAll() ([]wallet.Utxo, error) {
-	if f.getAll == nil {
-		panic("not implemented")
+func (f *FakeUtxos) GetAll() (a []wallet.Utxo, err error) {
+	f.Do(f.init)
+	for _, u := range f.utxos {
+		a = append(a, u)
 	}
-	return f.getAll()
+	return a, nil
 }
 
 // Make a utxo unspendable
 func (f *FakeUtxos) SetWatchOnly(utxo wallet.Utxo) error {
-	if f.setWatchOnly == nil {
-		panic("not implemented")
+	f.Do(f.init)
+	if u, ok := f.utxos[utxo.Op.String()]; ok {
+		u.WatchOnly = true
+		f.utxos[utxo.Op.String()] = u
+		return nil
 	}
-	return f.setWatchOnly(utxo)
+	return fmt.Errorf("not found")
 }
 
 // Delete a utxo from the db
 func (f *FakeUtxos) Delete(utxo wallet.Utxo) error {
-	if f.delete == nil {
-		panic("not implemented")
-	}
-	return f.delete(utxo)
+	f.Do(f.init)
+	delete(f.utxos, utxo.Op.String())
+	return nil
 }
 
 type FakeStxos struct {
-	// Put a stxo to the database
-	put func(stxo wallet.Stxo) error
+	sync.Once
+	stxos map[string]wallet.Stxo
+}
 
-	// Fetch all stxos from the db
-	getAll func() ([]wallet.Stxo, error)
-
-	// Delete a stxo from the db
-	delete func(stxo wallet.Stxo) error
+func (f *FakeStxos) init() {
+	if f.stxos == nil {
+		f.stxos = make(map[string]wallet.Stxo)
+	}
 }
 
 // Put a stxo to the database
 func (f *FakeStxos) Put(stxo wallet.Stxo) error {
-	if f.put == nil {
-		panic("not implemented")
-	}
-	return f.put(stxo)
+	f.Do(f.init)
+	f.stxos[stxo.Utxo.Op.String()] = stxo
+	return nil
 }
 
 // Fetch all stxos from the db
-func (f *FakeStxos) GetAll() ([]wallet.Stxo, error) {
-	if f.getAll == nil {
-		panic("not implemented")
+func (f *FakeStxos) GetAll() (a []wallet.Stxo, err error) {
+	f.Do(f.init)
+	for _, s := range f.stxos {
+		a = append(a, s)
 	}
-	return f.getAll()
+	return a, nil
 }
 
 // Delete a stxo from the db
 func (f *FakeStxos) Delete(stxo wallet.Stxo) error {
-	if f.delete == nil {
-		panic("not implemented")
-	}
-	return f.delete(stxo)
+	f.Do(f.init)
+	delete(f.stxos, stxo.Utxo.Op.String())
+	return nil
 }
 
 type FakeTxns struct {
-	put          func(txn []byte, txid string, value, height int, timestamp time.Time, watchOnly bool) error
-	get          func(txid chainhash.Hash) (wallet.Txn, error)
-	getAll       func(includeWatchOnly bool) ([]wallet.Txn, error)
-	updateHeight func(txid chainhash.Hash, height int) error
-	delete       func(txid *chainhash.Hash) error
+	sync.Once
+	txns map[string]wallet.Txn
+}
+
+func (f *FakeTxns) init() {
+	if f.txns == nil {
+		f.txns = make(map[string]wallet.Txn)
+	}
 }
 
 // Put a new transaction to the database
 func (f *FakeTxns) Put(txn []byte, txid string, value, height int, timestamp time.Time, watchOnly bool) error {
-	if f.put == nil {
-		panic("not implemented")
+	f.Do(f.init)
+	f.txns[txid] = wallet.Txn{
+		Txid:      txid,
+		Value:     int64(value),
+		Height:    int32(height),
+		Timestamp: timestamp,
+		WatchOnly: watchOnly,
+		Bytes:     txn,
 	}
-	return f.put(txn, txid, value, height, timestamp, watchOnly)
+	return nil
 }
 
 // Fetch a raw tx and it's metadata given a hash
 func (f *FakeTxns) Get(txid chainhash.Hash) (wallet.Txn, error) {
-	if f.get == nil {
-		panic("not implemented")
+	f.Do(f.init)
+	if t, ok := f.txns[txid.String()]; ok {
+		return t, nil
 	}
-	return f.get(txid)
+	return wallet.Txn{}, fmt.Errorf("not found")
 }
 
 // Fetch all transactions from the db
-func (f *FakeTxns) GetAll(includeWatchOnly bool) ([]wallet.Txn, error) {
-	if f.getAll == nil {
-		panic("not implemented")
+func (f *FakeTxns) GetAll(includeWatchOnly bool) (a []wallet.Txn, err error) {
+	f.Do(f.init)
+	for _, t := range f.txns {
+		if !includeWatchOnly && t.WatchOnly {
+			continue
+		}
+		a = append(a, t)
 	}
-	return f.getAll(includeWatchOnly)
+	return a, nil
 }
 
 // Update the height of a transaction
 func (f *FakeTxns) UpdateHeight(txid chainhash.Hash, height int) error {
-	if f.updateHeight == nil {
-		panic("not implemented")
+	f.Do(f.init)
+	if t, ok := f.txns[txid.String()]; ok {
+		t.Height = int32(height)
+		f.txns[txid.String()] = t
+		return nil
 	}
-	return f.updateHeight(txid, height)
+	return fmt.Errorf("not found")
 }
 
 // Delete a transactions from the db
 func (f *FakeTxns) Delete(txid *chainhash.Hash) error {
-	if f.delete == nil {
-		panic("not implemented")
-	}
-	return f.delete(txid)
+	f.Do(f.init)
+	delete(f.txns, txid.String())
+	return nil
 }
 
 type FakeInsightClient struct {
