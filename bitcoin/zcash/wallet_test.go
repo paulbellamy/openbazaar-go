@@ -45,7 +45,28 @@ func TestNewWalletDialsTheInsightAPI(t *testing.T) {
 }
 
 func TestWalletMnemonicDeterminesMasterKey(t *testing.T) {
-	t.Error("pending")
+	// Generate a key, and initialize the wallet with it.
+	config1 := testConfig(t)
+	config1.Mnemonic = ""
+	w1, err := NewWallet(config1)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	config2 := testConfig(t)
+	config2.Mnemonic = "submit daughter wrist uniform slide truck doll couch news word cool tissue obvious panel skull firm hospital wreck bind correct develop pistol short replace"
+	w2, err := NewWallet(config2)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if w1.MasterPrivateKey().String() == w2.MasterPrivateKey().String() {
+		t.Errorf("Mnemonic did not change master private key")
+	}
+
+	if w1.MasterPublicKey().String() == w2.MasterPublicKey().String() {
+		t.Errorf("Mnemonic did not change master public key")
+	}
 }
 
 func TestWalletParams(t *testing.T) {
