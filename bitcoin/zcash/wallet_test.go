@@ -40,10 +40,6 @@ func testConfig(t *testing.T) Config {
 	}
 }
 
-func TestNewWalletDialsTheInsightAPI(t *testing.T) {
-	t.Error("pending")
-}
-
 func TestWalletMnemonicDeterminesMasterKey(t *testing.T) {
 	// Generate a key, and initialize the wallet with it.
 	config1 := testConfig(t)
