@@ -263,7 +263,7 @@ func (w *Wallet) Transactions() ([]wallet.Txn, error) {
 
 // Get info on a specific transaction
 func (w *Wallet) GetTransaction(txid chainhash.Hash) (wallet.Txn, error) {
-	panic("not implemented")
+	return w.DB.Txns().Get(txid)
 }
 
 // Get the height and best hash of the blockchain
