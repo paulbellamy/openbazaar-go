@@ -334,6 +334,7 @@ func TestWalletTransactionsInitialLoad(t *testing.T) {
 	txnChan := make(chan client.Transaction)
 	newInsightClient = func(url string, proxyDialer proxy.Dialer) (InsightClient, error) {
 		return &FakeInsightClient{
+			getBlocks: func() ([]client.Block, error) { return nil, nil },
 			getTransactions: func(addrs []btc.Address) ([]client.Transaction, error) {
 				// TODO: Put some txns here
 				return []client.Transaction{{Txid: "a"}}, nil
@@ -360,4 +361,61 @@ func TestWalletTransactionsInitialLoad(t *testing.T) {
 	if !reflect.DeepEqual(txns, expectedTxns) {
 		t.Errorf("\nExpected: %v\n     Got: %v", expectedTxns, txns)
 	}
+}
+
+// TODO: Test initial load of transactions
+// TODO: Test ongoing transactions
+// TODO: Test race condition of transactions coming in after initial load
+func TestWalletChainTip(t *testing.T) {
+	var expectedHeight uint32 = 1234
+	expectedHash, _ := chainhash.NewHashFromStr("a")
+	blockChan := make(chan client.Block)
+	newInsightClient = func(url string, proxyDialer proxy.Dialer) (InsightClient, error) {
+		return &FakeInsightClient{
+			getBlocks: func() ([]client.Block, error) {
+				// return a block
+				return []client.Block{
+					{Hash: expectedHash.String(), Height: int(expectedHeight)},
+				}, nil
+			},
+			blockNotify: func() <-chan client.Block { return blockChan },
+			getTransactions: func(addrs []btc.Address) ([]client.Transaction, error) {
+				// TODO: Put some txns here
+				return []client.Transaction{{Txid: "a"}}, nil
+			},
+			getRawTransaction: func(txid string) ([]byte, error) { return nil, nil },
+		}, nil
+	}
+
+	config := testConfig(t)
+	w, err := NewWallet(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.Start()
+	defer w.Close()
+
+	// Initial blocks are loaded
+	blockHeight, blockHash := w.ChainTip()
+	if blockHeight != expectedHeight {
+		t.Errorf("\nExpected: %v\n     Got: %v", expectedHeight, blockHeight)
+	}
+	if blockHash.String() != expectedHash.String() {
+		t.Errorf("\nExpected: %v\n     Got: %v", expectedHash, blockHash)
+	}
+
+	// New blocks update the tip
+	var newHeight uint32 = 9999
+	newHash, _ := chainhash.NewHashFromStr("b")
+	// Push it twice, and we know that it will have been processed at least once
+	blockChan <- client.Block{Height: int(newHeight), Hash: newHash.String()}
+	blockChan <- client.Block{Height: int(newHeight), Hash: newHash.String()}
+	blockHeight, blockHash = w.ChainTip()
+	if blockHeight != newHeight {
+		t.Errorf("\nExpected: %v\n     Got: %v", newHeight, blockHeight)
+	}
+	if blockHash.String() != newHash.String() {
+		t.Errorf("\nExpected: %v\n     Got: %v", newHash, blockHash)
+	}
+
 }

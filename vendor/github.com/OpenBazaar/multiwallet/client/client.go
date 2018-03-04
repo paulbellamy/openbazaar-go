@@ -213,6 +213,67 @@ func (i *InsightClient) getTransactions(addrs []btcutil.Address, from, to int) (
 	return tl, nil
 }
 
+func (i *InsightClient) GetBlocks() ([]Block, error) {
+	// Fetch the genesis hash
+	genesis, err := i.GetBlockIndex(0)
+	if err != nil {
+		return nil, err
+	}
+
+	var blocks []Block
+	to := time.Now().UTC()
+	for {
+		page, err := i.getBlocks(to)
+		if err != nil {
+			return blocks, err
+		}
+		blocks = append(blocks, page.Blocks...)
+		if len(page.Blocks) > 0 && page.Blocks[0].Hash == genesis.Hash {
+			// We're done
+			break
+		}
+		if page.Pagination.More {
+			// Move back within the day
+			// Last block has the earliest timestamp
+			to = time.Unix(page.Blocks[len(page.Blocks)-1].Time, 0)
+		} else {
+			// move back a day, to (just before) midnight
+			to = to.Truncate(24 * time.Hour).Add(-1 * time.Nanosecond)
+		}
+	}
+	return blocks, nil
+}
+
+func (i *InsightClient) getBlocks(to time.Time) (*BlockList, error) {
+	resp, err := i.doRequest("blocks", http.MethodGet, nil, url.Values{
+		"blockDate":      {to.Format("2006-01-02")},
+		"startTimestamp": {fmt.Sprint(to.Unix())},
+	})
+	if err != nil {
+		return nil, err
+	}
+	list := new(BlockList)
+	decoder := json.NewDecoder(resp.Body)
+	defer resp.Body.Close()
+	if err = decoder.Decode(list); err != nil {
+		return nil, fmt.Errorf("error decoding block list: %s\n", err)
+	}
+	return list, nil
+}
+
+func (i *InsightClient) GetBlockIndex(height int) (*Block, error) {
+	resp, err := i.doRequest(fmt.Sprintf("block-index/%d", height), http.MethodGet, nil, nil)
+	if err != nil {
+		return nil, err
+	}
+	block := new(Block)
+	decoder := json.NewDecoder(resp.Body)
+	defer resp.Body.Close()
+	if err = decoder.Decode(block); err != nil {
+		return nil, fmt.Errorf("error decoding block: %s\n", err)
+	}
+	return block, nil
+}
 func (i *InsightClient) GetUtxos(addrs []btcutil.Address) ([]Utxo, error) {
 	type req struct {
 		Addrs string `json:"addrs"`

@@ -27,6 +27,7 @@ type Wallet struct {
 	masterPublicKey  *hd.ExtendedKey
 	insight          InsightClient
 	txStore          TxStore
+	blockStore       BlockStore
 	stopChan         chan struct{}
 }
 
@@ -45,6 +46,8 @@ var newInsightClient = func(url string, proxyDialer proxy.Dialer) (InsightClient
 }
 
 type InsightClient interface {
+	GetBlocks() ([]client.Block, error)
+	BlockNotify() <-chan client.Block
 	GetTransactions(addrs []btc.Address) ([]client.Transaction, error)
 	GetRawTransaction(txid string) ([]byte, error)
 	TransactionNotify() <-chan client.Transaction
@@ -66,6 +69,10 @@ func NewWallet(config Config) (*Wallet, error) {
 	if err != nil {
 		return nil, err
 	}
+	blockStore, err := NewBlockStore()
+	if err != nil {
+		return nil, err
+	}
 
 	w := &Wallet{
 		Config:           config,
@@ -74,18 +81,11 @@ func NewWallet(config Config) (*Wallet, error) {
 		masterPublicKey:  mPubKey,
 		insight:          insight,
 		txStore:          txStore,
+		blockStore:       blockStore,
 		stopChan:         make(chan struct{}),
 	}
 
 	return w, nil
-}
-
-func (w *Wallet) ingest(txn client.Transaction) error {
-	raw, err := w.insight.GetRawTransaction(txn.Txid)
-	if err != nil {
-		return err
-	}
-	return w.txStore.Ingest(txn, raw)
 }
 
 // Start the wallet
@@ -95,6 +95,16 @@ func (w *Wallet) ingest(txn client.Transaction) error {
 func (w *Wallet) Start() {
 	w.loadInitialTransactions()
 	go w.watchTransactions()
+	w.loadInitialBlocks()
+	go w.watchBlocks()
+}
+
+func (w *Wallet) onTxn(txn client.Transaction) error {
+	raw, err := w.insight.GetRawTransaction(txn.Txid)
+	if err != nil {
+		return err
+	}
+	return w.txStore.Ingest(txn, raw)
 }
 
 func (w *Wallet) loadInitialTransactions() {
@@ -104,7 +114,7 @@ func (w *Wallet) loadInitialTransactions() {
 		return
 	}
 	for _, txn := range txns {
-		if err := w.ingest(txn); err != nil {
+		if err := w.onTxn(txn); err != nil {
 			log.Error(err)
 			return
 		}
@@ -120,10 +130,46 @@ func (w *Wallet) watchTransactions() {
 			if !ok {
 				return
 			}
-			if err := w.ingest(txn); err != nil {
+			if err := w.onTxn(txn); err != nil {
 				log.Errorf("error fetching transaction %v: %v", txn.Txid, err)
 			} else {
 				log.Debugf("fetched transaction %v", txn.Txid)
+			}
+		}
+	}
+}
+
+func (w *Wallet) onBlock(block client.Block) error {
+	return w.blockStore.Ingest(block)
+}
+
+func (w *Wallet) loadInitialBlocks() {
+	blocks, err := w.insight.GetBlocks()
+	if err != nil {
+		log.Error(err)
+		return
+	}
+	for _, block := range blocks {
+		if err := w.onBlock(block); err != nil {
+			log.Error(err)
+			return
+		}
+	}
+}
+
+func (w *Wallet) watchBlocks() {
+	for {
+		select {
+		case <-w.stopChan:
+			return
+		case block, ok := <-w.insight.BlockNotify():
+			if !ok {
+				return
+			}
+			if err := w.onBlock(block); err != nil {
+				log.Errorf("error fetching block %v: %v", block.Hash, err)
+			} else {
+				log.Debugf("fetched block %v", block.Hash)
 			}
 		}
 	}
@@ -267,10 +313,13 @@ func (w *Wallet) GetTransaction(txid chainhash.Hash) (wallet.Txn, error) {
 }
 
 // Get the height and best hash of the blockchain
-// TODO: Implement this
 func (w *Wallet) ChainTip() (uint32, chainhash.Hash) {
-	var ch chainhash.Hash
-	return 0, ch
+	block := w.blockStore.Latest()
+	if block == nil {
+		return 0, chainhash.Hash{}
+	}
+	hash, _ := chainhash.NewHashFromStr(block.Hash)
+	return uint32(block.Height), *hash
 }
 
 // Get the current fee per byte
