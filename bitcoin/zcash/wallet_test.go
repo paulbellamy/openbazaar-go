@@ -369,10 +369,12 @@ func TestWalletTransactionsInitialLoad(t *testing.T) {
 func TestWalletChainTip(t *testing.T) {
 	var expectedHeight uint32 = 1234
 	expectedHash, _ := chainhash.NewHashFromStr("a")
+	getBlocksCalled := make(chan struct{})
 	blockChan := make(chan client.Block)
 	newInsightClient = func(url string, proxyDialer proxy.Dialer) (InsightClient, error) {
 		return &FakeInsightClient{
 			getBlocks: func() ([]client.Block, error) {
+				close(getBlocksCalled)
 				// return a block
 				return []client.Block{
 					{Hash: expectedHash.String(), Height: int(expectedHeight)},
@@ -396,6 +398,7 @@ func TestWalletChainTip(t *testing.T) {
 	defer w.Close()
 
 	// Initial blocks are loaded
+	<-getBlocksCalled
 	blockHeight, blockHash := w.ChainTip()
 	if blockHeight != expectedHeight {
 		t.Errorf("\nExpected: %v\n     Got: %v", expectedHeight, blockHeight)
@@ -417,5 +420,4 @@ func TestWalletChainTip(t *testing.T) {
 	if blockHash.String() != newHash.String() {
 		t.Errorf("\nExpected: %v\n     Got: %v", newHash, blockHash)
 	}
-
 }

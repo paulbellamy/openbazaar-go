@@ -95,8 +95,10 @@ func NewWallet(config Config) (*Wallet, error) {
 func (w *Wallet) Start() {
 	w.loadInitialTransactions()
 	go w.watchTransactions()
-	w.loadInitialBlocks()
-	go w.watchBlocks()
+	go func() {
+		w.loadInitialBlocks()
+		w.watchBlocks()
+	}()
 }
 
 func (w *Wallet) onTxn(txn client.Transaction) error {
