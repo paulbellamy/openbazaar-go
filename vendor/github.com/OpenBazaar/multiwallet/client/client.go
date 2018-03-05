@@ -213,9 +213,10 @@ func (i *InsightClient) getTransactions(addrs []btcutil.Address, from, to int) (
 	return tl, nil
 }
 
-func (i *InsightClient) GetBlocks() ([]Block, error) {
+// GetBlocks loads all blocks since the provided block index
+func (i *InsightClient) GetBlocks(fromIndex int) ([]Block, error) {
 	// Fetch the genesis hash
-	genesis, err := i.GetBlockIndex(0)
+	genesis, err := i.GetBlockIndex(fromIndex)
 	if err != nil {
 		return nil, err
 	}
@@ -223,7 +224,7 @@ func (i *InsightClient) GetBlocks() ([]Block, error) {
 	var blocks []Block
 	to := time.Now().UTC()
 	for {
-		page, err := i.getBlocks(to)
+		page, err := i.getBlocks(to, 200)
 		if err != nil {
 			return blocks, err
 		}
@@ -244,10 +245,11 @@ func (i *InsightClient) GetBlocks() ([]Block, error) {
 	return blocks, nil
 }
 
-func (i *InsightClient) getBlocks(to time.Time) (*BlockList, error) {
+func (i *InsightClient) getBlocks(to time.Time, limit int) (*BlockList, error) {
 	resp, err := i.doRequest("blocks", http.MethodGet, nil, url.Values{
 		"blockDate":      {to.Format("2006-01-02")},
 		"startTimestamp": {fmt.Sprint(to.Unix())},
+		"limit":          {fmt.Sprint(limit)},
 	})
 	if err != nil {
 		return nil, err
@@ -274,6 +276,16 @@ func (i *InsightClient) GetBlockIndex(height int) (*Block, error) {
 	}
 	return block, nil
 }
+
+// GetLatestBlock loads a summary of the latest block
+func (i *InsightClient) GetLatestBlock() (*Block, error) {
+	page, err := i.getBlocks(time.Now().UTC(), 1)
+	if err != nil || len(page.Blocks) == 0 {
+		return nil, err
+	}
+	return &page.Blocks[0], nil
+}
+
 func (i *InsightClient) GetUtxos(addrs []btcutil.Address) ([]Utxo, error) {
 	type req struct {
 		Addrs string `json:"addrs"`

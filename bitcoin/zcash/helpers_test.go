@@ -338,25 +338,17 @@ func (f *FakeTxns) Delete(txid *chainhash.Hash) error {
 }
 
 type FakeInsightClient struct {
-	getBlocks         func() ([]client.Block, error)
-	blockNotify       func() <-chan client.Block
+	getLatestBlock    func() (*client.Block, error)
 	getTransactions   func(addrs []btcutil.Address) ([]client.Transaction, error)
 	getRawTransaction func(txid string) ([]byte, error)
 	transactionNotify func() <-chan client.Transaction
 }
 
-func (f *FakeInsightClient) GetBlocks() ([]client.Block, error) {
-	if f.getBlocks == nil {
+func (f *FakeInsightClient) GetLatestBlock() (*client.Block, error) {
+	if f.getLatestBlock == nil {
 		panic("not implemented")
 	}
-	return f.getBlocks()
-}
-
-func (f *FakeInsightClient) BlockNotify() <-chan client.Block {
-	if f.blockNotify == nil {
-		return nil
-	}
-	return f.blockNotify()
+	return f.getLatestBlock()
 }
 
 func (f *FakeInsightClient) GetTransactions(addrs []btcutil.Address) ([]client.Transaction, error) {
