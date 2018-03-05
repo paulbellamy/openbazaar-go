@@ -342,7 +342,12 @@ func (w *Wallet) ReSyncBlockchain(fromTime time.Time) {
 
 // Return the number of confirmations and the height for a transaction
 func (w *Wallet) GetConfirmations(txid chainhash.Hash) (confirms, atHeight uint32, err error) {
-	panic("not implemented")
+	txn, err := w.DB.Txns().Get(txid)
+	if err != nil || txn.Height == 0 {
+		return 0, 0, err
+	}
+	chainTip, _ := w.ChainTip()
+	return chainTip - uint32(txn.Height) + 1, uint32(txn.Height), nil
 }
 
 // Cleanly disconnect from the wallet

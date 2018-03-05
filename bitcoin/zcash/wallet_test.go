@@ -399,3 +399,75 @@ func TestWalletChainTip(t *testing.T) {
 		t.Errorf("\nExpected: %v\n     Got: %v", expectedHash, blockHash)
 	}
 }
+
+func TestWalletGetConfirmations(t *testing.T) {
+	txHash, _ := chainhash.NewHashFromStr("a")
+	blockHash, _ := chainhash.NewHashFromStr("b")
+	for _, tc := range []struct {
+		name             string
+		height, confirms uint32
+		err              error
+		txns             []client.Transaction
+		block            *client.Block
+	}{
+		{
+			name:     "not found",
+			height:   0,
+			confirms: 0,
+			err:      fmt.Errorf("not found"),
+			txns:     nil,
+			block:    &client.Block{Hash: blockHash.String(), Height: 1234},
+		},
+		{
+			name:     "unconfirmed",
+			height:   0,
+			confirms: 0,
+			txns:     []client.Transaction{{Version: 1, Txid: txHash.String(), Inputs: []client.Input{{}}, BlockHeight: 0}},
+			block:    &client.Block{Hash: blockHash.String(), Height: 1234},
+		},
+		{
+			name:     "just confirmed",
+			height:   1234,
+			confirms: 1,
+			txns:     []client.Transaction{{Version: 1, Txid: txHash.String(), Inputs: []client.Input{{}}, BlockHeight: 1234}},
+			block:    &client.Block{Hash: blockHash.String(), Height: 1234},
+		},
+		{
+			name:     "confirmed",
+			height:   1234,
+			confirms: 6,
+			txns:     []client.Transaction{{Version: 1, Txid: txHash.String(), Inputs: []client.Input{{}}, BlockHeight: 1234}},
+			block:    &client.Block{Hash: blockHash.String(), Height: 1234 + 5},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			newInsightClient = func(url string, proxyDialer proxy.Dialer) (InsightClient, error) {
+				return &FakeInsightClient{
+					getLatestBlock:    func() (*client.Block, error) { return tc.block, nil },
+					getTransactions:   func(addrs []btc.Address) ([]client.Transaction, error) { return tc.txns, nil },
+					getRawTransaction: func(txid string) ([]byte, error) { return nil, nil },
+				}, nil
+			}
+
+			config := testConfig(t)
+			w, err := NewWallet(config)
+			if err != nil {
+				t.Fatal(err)
+			}
+			w.Start()
+			defer w.Close()
+
+			// Initial blocks are loaded
+			confirms, atHeight, err := w.GetConfirmations(*txHash)
+			if fmt.Sprint(tc.err) != fmt.Sprint(err) {
+				t.Errorf("\nExpected error: %v\n     Got error: %v", tc.err, err)
+			}
+			if atHeight != uint32(tc.height) {
+				t.Errorf("\nExpected: %v\n     Got: %v", tc.height, atHeight)
+			}
+			if confirms != uint32(tc.confirms) {
+				t.Errorf("\nExpected: %v\n     Got: %v", tc.confirms, confirms)
+			}
+		})
+	}
+}
