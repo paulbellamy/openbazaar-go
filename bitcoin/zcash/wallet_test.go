@@ -450,6 +450,9 @@ func TestWalletGetConfirmations(t *testing.T) {
 			}
 
 			config := testConfig(t)
+			// Add an existing stxo so the txn is relevant.
+			config.DB.Stxos().Put(wallet.Stxo{SpendTxid: *txHash})
+
 			w, err := NewWallet(config)
 			if err != nil {
 				t.Fatal(err)

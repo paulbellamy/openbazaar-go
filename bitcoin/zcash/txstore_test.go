@@ -26,11 +26,12 @@ func TestTxStoreIngestAddsTxnsToDB(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	hash, _ := chainhash.NewHashFromStr("a")
+	config.DB.Stxos().Put(wallet.Stxo{SpendTxid: *hash})
 	txn := client.Transaction{
 		Version: 1,
-		Inputs: []client.Input{
-			{},
-		},
+		Txid:    hash.String(),
+		Inputs:  []client.Input{{}},
 	}
 	if err := txStore.Ingest(txn, nil); err != nil {
 		t.Fatal(err)
@@ -58,12 +59,12 @@ func TestTxStoreIngestIgnoresDuplicates(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	hash, _ := chainhash.NewHashFromStr("a")
+	config.DB.Stxos().Put(wallet.Stxo{SpendTxid: *hash})
 	txn := client.Transaction{
-		Txid:    "a",
+		Txid:    hash.String(),
 		Version: 1,
-		Inputs: []client.Input{
-			{},
-		},
+		Inputs:  []client.Input{{}},
 	}
 	for i := 0; i < 2; i++ {
 		if err := txStore.Ingest(txn, nil); err != nil {
@@ -175,9 +176,53 @@ func TestTxStoreIngestUpdatesUtxos(t *testing.T) {
 	if len(utxos) != 1 {
 		t.Errorf("Expected 1 utxo, got: %d", len(utxos))
 	}
+}
 
-	if usedKeys != 1 {
-		t.Errorf("Expected to mark key as used")
+func TestTxStoreIngestOnlyStoresRelevantTxns(t *testing.T) {
+	config := testConfig(t)
+	seed := b39.NewSeed(config.Mnemonic, "")
+	mPrivKey, _ := hd.NewMaster(seed, config.Params)
+	keyManager, err := keys.NewKeyManager(config.DB.Keys(), config.Params, mPrivKey, keys.Zcash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	txStore, err := NewTxStore(config.Params, config.DB, keyManager)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys := keyManager.GetKeys()
+	if len(keys) == 0 {
+		t.Fatal(err)
+	}
+
+	hash, _ := chainhash.NewHashFromStr("a")
+	txn := client.Transaction{
+		Txid:    hash.String(),
+		Version: 1,
+		Inputs: []client.Input{
+			{},
+		},
+		Outputs: []client.Output{
+			{
+				ScriptPubKey: client.OutScript{
+					Addresses: []string{"SomeOtherAddress"},
+					Type:      "pubkeyhash",
+				},
+				Value: 1.234,
+				N:     0,
+			},
+		},
+	}
+	if err := txStore.Ingest(txn, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	txns, err := config.DB.Txns().GetAll(true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(txns) != 0 {
+		t.Errorf("Expected txn not to be stored, but got: %v", txns)
 	}
 }
 

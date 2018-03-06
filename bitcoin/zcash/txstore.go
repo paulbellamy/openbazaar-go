@@ -53,21 +53,22 @@ func (t *txStore) Ingest(txn client.Transaction, raw []byte) error {
 	// TODO: Check if it is a relevant txn, and only store that.
 
 	// Update utxos, and calculate value
-	value := t.storeUtxos(txn, hash)
+	value, isRelevant, watchOnly := t.storeUtxos(txn, hash)
 
 	// Update stxos, and calculate value
-	v2, err := t.storeStxos(txn, hash)
+	value2, isRelevant2, watchOnly2, err := t.storeStxos(txn, hash)
 	if err != nil {
 		log.Errorf("unable to store stxos for %v: %v", txn.Txid, err)
 	}
-	value += v2
+	value += value2
+	isRelevant = isRelevant || isRelevant2
+	watchOnly = watchOnly || watchOnly2
+	if !isRelevant {
+		return nil
+	}
 
 	// Store the transaction
-	// TODO: Calculate watchOnly here
-	watchOnly := false
-	t.db.Txns().Put(raw, hash.String(), value, txn.BlockHeight, time.Unix(txn.Time, 0), watchOnly)
-
-	return nil
+	return t.db.Txns().Put(raw, hash.String(), value, txn.BlockHeight, time.Unix(txn.Time, 0), watchOnly)
 }
 
 // validTxn validates a transaction based on rules from zcash protocol spec,
@@ -85,8 +86,7 @@ func validTxn(txn client.Transaction) error {
 	return nil
 }
 
-func (t *txStore) storeUtxos(txn client.Transaction, hash *chainhash.Hash) int {
-	var value int
+func (t *txStore) storeUtxos(txn client.Transaction, hash *chainhash.Hash) (value int, isRelevant, watchOnly bool) {
 	addrs := keysToAddresses(t.params, t.keyManager.GetKeys())
 	for _, output := range txn.Outputs {
 		for _, addr := range addrs {
@@ -126,24 +126,25 @@ func (t *txStore) storeUtxos(txn client.Transaction, hash *chainhash.Hash) int {
 			}
 
 			value += int(utxo.Value)
+			isRelevant = true
 		}
+
+		// TODO: Check watched scripts here
 	}
-	return value
+	return value, isRelevant, watchOnly
 }
 
-// TODO: Update existing stxo height, if it already exists.
-func (t *txStore) storeStxos(txn client.Transaction, hash *chainhash.Hash) (int, error) {
+func (t *txStore) storeStxos(txn client.Transaction, hash *chainhash.Hash) (value int, isRelevant, watchOnly bool, err error) {
 	utxos, err := t.db.Utxos().GetAll()
 	if err != nil {
-		return 0, err
+		return 0, false, false, err
 	}
 
 	stxos, err := t.db.Stxos().GetAll()
 	if err != nil {
-		return 0, err
+		return 0, false, false, err
 	}
 
-	var value int
 	for _, input := range txn.Inputs {
 		// Have we already seen this stxo?
 		if stxo, ok := hasMatchingStxo(stxos, hash); ok {
@@ -153,7 +154,8 @@ func (t *txStore) storeStxos(txn client.Transaction, hash *chainhash.Hash) (int,
 			if err != nil {
 				log.Errorf("could save stxo: %v", err)
 			}
-			// TODO: Handle watchOnly here
+			isRelevant = true
+			watchOnly = watchOnly || stxo.Utxo.WatchOnly
 			continue
 		}
 
@@ -179,10 +181,12 @@ func (t *txStore) storeStxos(txn client.Transaction, hash *chainhash.Hash) (int,
 			if !utxo.WatchOnly {
 				value -= int(utxo.Value)
 			}
+			isRelevant = true
+			watchOnly = watchOnly || utxo.WatchOnly
 			break
 		}
 	}
-	return value, nil
+	return value, isRelevant, watchOnly, nil
 }
 
 func hasMatchingStxo(stxos []wallet.Stxo, hash *chainhash.Hash) (wallet.Stxo, bool) {
