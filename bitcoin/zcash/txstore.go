@@ -32,7 +32,6 @@ func NewTxStore(params *chaincfg.Params, db wallet.Datastore, km *keys.KeyManage
 	}, nil
 }
 
-// TODO: Generate a raw, "wire" txn here, eugh. maybe just nil for now, This is the downside of using the insight api, is we don't get the raw txn data. (but we can ask for it)
 // TODO: Check if we've already processed this txn, and update height accordingly
 // TODO: Check for double-spends
 // TODO: Check txn is relevant
@@ -46,30 +45,27 @@ func (t *txStore) Ingest(txn client.Transaction, raw []byte) error {
 		return err
 	}
 
-	// Check to see if we've already processed this tx.
-	if _, err := t.db.Txns().Get(*hash); err != nil {
-		// TODO: Don't assume that any error means "not found"
-		// TODO: Calculate the value here
-		// TODO: Calculate watchOnly here
-		// Not found
-
-		// Update utxos, and calculate value
-		value := t.storeUtxos(txn, hash)
-
-		v2, err := t.storeStxos(txn, hash)
-		if err != nil {
-			log.Errorf("unable to store stxos for %v: %v", txn.Txid, err)
-		}
-		value += v2
-
-		// Store the transaction
-		watchOnly := false
-		t.db.Txns().Put(raw, hash.String(), value, txn.BlockHeight, time.Unix(txn.Time, 0), watchOnly)
-	} else {
+	if existing, err := t.db.Txns().Get(*hash); err == nil && (existing.Height > 0 || (existing.Height == 0 && txn.BlockHeight == 0)) {
 		// We've already processed this txn
-		// TODO: Check if existing spendheight was 0
-		// TODO: Figure out new height and update txn and stxos
+		return nil
 	}
+
+	// TODO: Check if it is a relevant txn, and only store that.
+
+	// Update utxos, and calculate value
+	value := t.storeUtxos(txn, hash)
+
+	// Update stxos, and calculate value
+	v2, err := t.storeStxos(txn, hash)
+	if err != nil {
+		log.Errorf("unable to store stxos for %v: %v", txn.Txid, err)
+	}
+	value += v2
+
+	// Store the transaction
+	// TODO: Calculate watchOnly here
+	watchOnly := false
+	t.db.Txns().Put(raw, hash.String(), value, txn.BlockHeight, time.Unix(txn.Time, 0), watchOnly)
 
 	return nil
 }
@@ -142,31 +138,58 @@ func (t *txStore) storeStxos(txn client.Transaction, hash *chainhash.Hash) (int,
 		return 0, err
 	}
 
+	stxos, err := t.db.Stxos().GetAll()
+	if err != nil {
+		return 0, err
+	}
+
 	var value int
 	for _, input := range txn.Inputs {
-		for i, u := range utxos {
-			if input.Txid != u.Op.Hash.String() || uint32(input.Vout) != u.Op.Index {
+		// Have we already seen this stxo?
+		if stxo, ok := hasMatchingStxo(stxos, hash); ok {
+			// Update the existing stxo
+			stxo.SpendHeight = int32(txn.BlockHeight)
+			err = t.db.Stxos().Put(stxo)
+			if err != nil {
+				log.Errorf("could save stxo: %v", err)
+			}
+			// TODO: Handle watchOnly here
+			continue
+		}
+
+		// Does it match a utxo?
+		for i, utxo := range utxos {
+			if input.Txid != utxo.Op.Hash.String() || uint32(input.Vout) != utxo.Op.Index {
 				continue
 			}
 			err = t.db.Stxos().Put(wallet.Stxo{
-				Utxo:        u,
+				Utxo:        utxo,
 				SpendHeight: int32(txn.BlockHeight),
 				SpendTxid:   *hash,
 			})
 			if err != nil {
 				log.Errorf("could save stxo: %v", err)
 			}
-			err = t.db.Utxos().Delete(u)
+			err = t.db.Utxos().Delete(utxo)
 			if err != nil {
 				log.Errorf("could delete utxo: %v", err)
 			}
 			// We're done with this utxo, no need to check it again.
 			utxos = append(utxos[:i], utxos[i+1:]...)
-			if !u.WatchOnly {
-				value -= int(u.Value)
+			if !utxo.WatchOnly {
+				value -= int(utxo.Value)
 			}
 			break
 		}
 	}
 	return value, nil
+}
+
+func hasMatchingStxo(stxos []wallet.Stxo, hash *chainhash.Hash) (wallet.Stxo, bool) {
+	for _, stxo := range stxos {
+		if stxo.SpendTxid.IsEqual(hash) {
+			return stxo, true
+		}
+	}
+	return wallet.Stxo{}, false
 }

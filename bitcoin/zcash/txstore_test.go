@@ -181,7 +181,7 @@ func TestTxStoreIngestUpdatesUtxos(t *testing.T) {
 	}
 }
 
-func TestTxStoreIngestUpdatesStxos(t *testing.T) {
+func TestTxStoreIngestAddsStxos(t *testing.T) {
 	config := testConfig(t)
 	seed := b39.NewSeed(config.Mnemonic, "")
 	mPrivKey, _ := hd.NewMaster(seed, config.Params)
@@ -220,7 +220,7 @@ func TestTxStoreIngestUpdatesStxos(t *testing.T) {
 	}
 	config.DB.Utxos().Put(receivedUtxo)
 
-	// Ingest the stxo-containing txn
+	// Ingest the initial stxo-containing txn
 	txn := client.Transaction{
 		Version:     1,
 		BlockHeight: 5,
@@ -285,5 +285,97 @@ func TestTxStoreIngestUpdatesStxos(t *testing.T) {
 	}
 	if txns[0].Value != -1.1*1e8 {
 		t.Errorf("Expected txn value %d, got: %d", int64(-1.1*1e8), txns[0].Value)
+	}
+}
+
+func TestTxStoreIngestUpdatesStxosHeight(t *testing.T) {
+	config := testConfig(t)
+	seed := b39.NewSeed(config.Mnemonic, "")
+	mPrivKey, _ := hd.NewMaster(seed, config.Params)
+	keyManager, err := keys.NewKeyManager(config.DB.Keys(), config.Params, mPrivKey, keys.Zcash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	txStore, err := NewTxStore(config.Params, config.DB, keyManager)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys := keyManager.GetKeys()
+	if len(keys) == 0 {
+		t.Fatal(err)
+	}
+	address := keyToAddress(keys[0], config.Params)
+
+	// Set up a previous txn where we received some utxos
+	outScript := client.OutScript{
+		Script:    client.Script{Hex: "abcd"},
+		Addresses: []string{address.EncodeAddress()},
+		Type:      "pubkeyhash",
+	}
+	scriptBytes, err := hex.DecodeString(outScript.Script.Hex)
+	if err != nil {
+		t.Fatalf("could not decode utxo for %v: %v", outScript, err)
+	}
+	prevHash, _ := chainhash.NewHashFromStr("a")
+	sequence := uint32(898) // position in the block outputs
+	existingStxo := wallet.Stxo{
+		SpendHeight: 0,
+		SpendTxid:   *prevHash,
+		Utxo: wallet.Utxo{
+			Op:           wire.OutPoint{*prevHash, sequence},
+			AtHeight:     1,
+			Value:        1.2345 * 1e8,
+			ScriptPubkey: scriptBytes,
+			WatchOnly:    false,
+		},
+	}
+	if err := config.DB.Stxos().Put(existingStxo); err != nil {
+		t.Fatal(err)
+	}
+
+	// Ingest the new stxo-containing txn
+	txn := client.Transaction{
+		Txid:        prevHash.String(),
+		Version:     1,
+		BlockHeight: 5,
+		Inputs: []client.Input{
+			{
+				Txid: prevHash.String(),
+				Vout: int(sequence),
+				Addr: address.EncodeAddress(),
+			},
+		},
+		Outputs: []client.Output{
+			{
+				// Burn some money
+				ScriptPubKey: client.OutScript{
+					Script:    client.Script{Hex: "0000"},
+					Addresses: []string{"0000"},
+					Type:      "pubkeyhash",
+				},
+				Value: 1.1,
+				N:     0,
+			},
+			{
+				// Return the change
+				ScriptPubKey: outScript,
+				Value:        1.2345 - 1.1,
+				N:            1,
+			},
+		},
+	}
+	if err := txStore.Ingest(txn, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	stxos, err := config.DB.Stxos().GetAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stxos) != 1 {
+		t.Fatalf("Expected 1 stxo, got: %v", stxos)
+	}
+	if stxos[0].SpendHeight != 5 {
+		t.Errorf("Expected stxo height to be updated, got: %d", stxos[0].SpendHeight)
 	}
 }
