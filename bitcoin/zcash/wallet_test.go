@@ -2,11 +2,12 @@ package zcash
 
 import (
 	"fmt"
-	"golang.org/x/net/proxy"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
+
+	"golang.org/x/net/proxy"
 
 	"github.com/OpenBazaar/multiwallet/client"
 	"github.com/OpenBazaar/multiwallet/keys"
@@ -472,5 +473,53 @@ func TestWalletGetConfirmations(t *testing.T) {
 				t.Errorf("\nExpected: %v\n     Got: %v", tc.confirms, confirms)
 			}
 		})
+	}
+}
+
+// TODO: Test insufficient funds
+// TODO: Test external insight api error
+// TODO: Calculate making change
+func TestWalletSpend(t *testing.T) {
+	var sentTx []byte
+	sentTxHash, _ := chainhash.NewHashFromStr("a")
+	newInsightClient = func(url string, proxyDialer proxy.Dialer) (InsightClient, error) {
+		return &FakeInsightClient{
+			broadcast: func(tx []byte) (string, error) {
+				sentTx = tx
+				return sentTxHash.String(), nil
+			},
+		}, nil
+	}
+	w, err := NewWallet(testConfig(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	address := w.CurrentAddress(wallet.EXTERNAL)
+	var expectedAmount int64 = 123400000
+	txHash, err := w.Spend(expectedAmount, address, wallet.NORMAL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if txHash == nil || txHash.String() != sentTxHash.String() {
+		t.Errorf("Expected tx hash %q, got: %q", sentTxHash, txHash)
+	}
+
+	// Check the sent txn is valid
+	var txn Transaction
+	if err := txn.UnmarshalBinary(sentTx); err != nil {
+		t.Fatal(err)
+	}
+	// Check there are inputs
+	if len(txn.Inputs) <= 0 {
+		t.Errorf("Expected some inputs, got: %d", len(txn.Inputs))
+	}
+	// Sum the output values
+	var outValue int64
+	for _, output := range txn.Outputs {
+		outValue += int64(output.Value * 1e8)
+	}
+	if outValue != expectedAmount {
+		t.Errorf("Expected amount %d, got outputs: %d", expectedAmount, outValue)
 	}
 }

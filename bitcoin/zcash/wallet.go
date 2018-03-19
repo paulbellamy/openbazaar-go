@@ -49,6 +49,7 @@ type InsightClient interface {
 	GetTransactions(addrs []btc.Address) ([]client.Transaction, error)
 	GetRawTransaction(txid string) ([]byte, error)
 	TransactionNotify() <-chan client.Transaction
+	Broadcast(tx []byte) (string, error)
 }
 
 func NewWallet(config Config) (*Wallet, error) {
@@ -287,7 +288,27 @@ func (w *Wallet) GetFeePerByte(feeLevel wallet.FeeLevel) uint64 {
 
 // Send bitcoins to an external wallet
 func (w *Wallet) Spend(amount int64, addr btc.Address, feeLevel wallet.FeeLevel) (*chainhash.Hash, error) {
-	panic("not implemented")
+	txn, err := w.buildTxn(amount, addr, feeLevel)
+	if err != nil {
+		return nil, err
+	}
+	hash, err := w.insight.Broadcast(txn)
+	if err != nil {
+		return nil, err
+	}
+	return chainhash.NewHashFromStr(hash)
+}
+
+func (w *Wallet) buildTxn(amount int64, addr btc.Address, feeLevel wallet.FeeLevel) ([]byte, error) {
+	// TODO: Calculate inputs
+	txn := &Transaction{
+		Inputs:  []Input{{Value: 1.234}},
+		Outputs: []client.Output{{Value: 1.234}},
+	}
+	if err := w.sign(txn); err != nil {
+		return nil, err
+	}
+	return txn.MarshalBinary()
 }
 
 // Bump the fee for the given transaction
