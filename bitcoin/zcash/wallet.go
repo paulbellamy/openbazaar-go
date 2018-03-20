@@ -215,7 +215,7 @@ func (w *Wallet) ScriptToAddress(script []byte) (btc.Address, error) {
 
 // Turn the given address into an output script
 func (w *Wallet) AddressToScript(addr btc.Address) ([]byte, error) {
-	panic("not implemented")
+	return zcashd.PayToAddrScript(addr)
 }
 
 // Returns if the wallet has the key for the given address

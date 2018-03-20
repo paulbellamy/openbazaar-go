@@ -251,6 +251,75 @@ func TestWalletScriptToAddress(t *testing.T) {
 	}
 }
 
+func TestWalletAddressToScript(t *testing.T) {
+	config := testConfig(t)
+	config.Params = &chaincfg.MainNetParams
+	w, err := NewWallet(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	btcAddr, err := btc.NewAddressPubKeyHash(make([]byte, 20, 20), config.Params)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	basicAddr, err := w.DecodeAddress("t3JZcvsuaXE6ygokL4XUiZSTrQBUoPYFnXJ")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct {
+		name    string
+		script  []byte
+		address btc.Address
+		err     error
+	}{
+		{
+			name:    "nil address",
+			address: nil,
+			script:  nil,
+			err:     fmt.Errorf("unable to generate payment script for unsupported address type <nil>"),
+		},
+		{
+			name:    "unsupported address type",
+			address: btcAddr,
+			script:  nil,
+			err:     fmt.Errorf("unable to generate payment script for unsupported address type *btcutil.AddressPubKeyHash"),
+		},
+		{
+			name:    "basic script",
+			address: basicAddr,
+			script:  []byte{0xa9, 0x14, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x87},
+			err:     nil,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			script, err := w.AddressToScript(tc.address)
+			switch {
+			case tc.err == nil && err != nil:
+				t.Errorf("\nUnexpected error: %v\n     Got: %v", tc.err, err)
+			case tc.err != nil && err == nil:
+				t.Errorf("\nUnexpected error: %v\n     Got: %v", tc.err, err)
+			case tc.err != nil && err != nil && tc.err.Error() != err.Error():
+				t.Errorf("\nUnexpected error: %v\n     Got: %v", tc.err, err)
+			}
+			if string(tc.script) != string(script) {
+				t.Errorf("\nExpected: %q\n     Got: %q", string(tc.script), string(script))
+			}
+			if len(script) > 0 {
+				gotAddress, err := w.ScriptToAddress(script)
+				if err != nil {
+					t.Errorf("Unable to check answer: %v", err)
+				}
+				if fmt.Sprint(gotAddress) != fmt.Sprint(tc.address) {
+					t.Errorf("Generated script was not to address %v, was to %v", tc.address, gotAddress)
+				}
+			}
+		})
+	}
+}
+
 func TestWalletDecodeAddress(t *testing.T) {
 	w, err := NewWallet(testConfig(t))
 	if err != nil {
