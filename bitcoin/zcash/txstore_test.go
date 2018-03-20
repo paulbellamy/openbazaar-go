@@ -17,7 +17,7 @@ func TestTxStoreIngestAddsTxnsToDB(t *testing.T) {
 	config := testConfig(t)
 	seed := b39.NewSeed(config.Mnemonic, "")
 	mPrivKey, _ := hd.NewMaster(seed, config.Params)
-	keyManager, err := keys.NewKeyManager(config.DB.Keys(), config.Params, mPrivKey, keys.Zcash)
+	keyManager, err := keys.NewKeyManager(config.DB.Keys(), config.Params, mPrivKey, keys.Zcash, keyToAddress)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,7 +50,7 @@ func TestTxStoreIngestIgnoresDuplicates(t *testing.T) {
 	config := testConfig(t)
 	seed := b39.NewSeed(config.Mnemonic, "")
 	mPrivKey, _ := hd.NewMaster(seed, config.Params)
-	keyManager, err := keys.NewKeyManager(config.DB.Keys(), config.Params, mPrivKey, keys.Zcash)
+	keyManager, err := keys.NewKeyManager(config.DB.Keys(), config.Params, mPrivKey, keys.Zcash, keyToAddress)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,7 +135,7 @@ func TestTxStoreIngestUpdatesUtxos(t *testing.T) {
 	}
 	seed := b39.NewSeed(config.Mnemonic, "")
 	mPrivKey, _ := hd.NewMaster(seed, config.Params)
-	keyManager, err := keys.NewKeyManager(config.DB.Keys(), config.Params, mPrivKey, keys.Zcash)
+	keyManager, err := keys.NewKeyManager(config.DB.Keys(), config.Params, mPrivKey, keys.Zcash, keyToAddress)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -147,7 +147,10 @@ func TestTxStoreIngestUpdatesUtxos(t *testing.T) {
 	if len(keys) == 0 {
 		t.Fatal(err)
 	}
-	address := keyToAddress(keys[0], config.Params)
+	address, err := keyToAddress(keys[0], config.Params)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	txn := client.Transaction{
 		Version: 1,
@@ -182,7 +185,7 @@ func TestTxStoreIngestOnlyStoresRelevantTxns(t *testing.T) {
 	config := testConfig(t)
 	seed := b39.NewSeed(config.Mnemonic, "")
 	mPrivKey, _ := hd.NewMaster(seed, config.Params)
-	keyManager, err := keys.NewKeyManager(config.DB.Keys(), config.Params, mPrivKey, keys.Zcash)
+	keyManager, err := keys.NewKeyManager(config.DB.Keys(), config.Params, mPrivKey, keys.Zcash, keyToAddress)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -230,7 +233,7 @@ func TestTxStoreIngestAddsStxos(t *testing.T) {
 	config := testConfig(t)
 	seed := b39.NewSeed(config.Mnemonic, "")
 	mPrivKey, _ := hd.NewMaster(seed, config.Params)
-	keyManager, err := keys.NewKeyManager(config.DB.Keys(), config.Params, mPrivKey, keys.Zcash)
+	keyManager, err := keys.NewKeyManager(config.DB.Keys(), config.Params, mPrivKey, keys.Zcash, keyToAddress)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -242,7 +245,10 @@ func TestTxStoreIngestAddsStxos(t *testing.T) {
 	if len(keys) == 0 {
 		t.Fatal(err)
 	}
-	address := keyToAddress(keys[0], config.Params)
+	address, err := keyToAddress(keys[0], config.Params)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// Set up a previous txn where we received some utxos
 	outScript := client.OutScript{
@@ -337,7 +343,7 @@ func TestTxStoreIngestUpdatesStxosHeight(t *testing.T) {
 	config := testConfig(t)
 	seed := b39.NewSeed(config.Mnemonic, "")
 	mPrivKey, _ := hd.NewMaster(seed, config.Params)
-	keyManager, err := keys.NewKeyManager(config.DB.Keys(), config.Params, mPrivKey, keys.Zcash)
+	keyManager, err := keys.NewKeyManager(config.DB.Keys(), config.Params, mPrivKey, keys.Zcash, keyToAddress)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -349,7 +355,10 @@ func TestTxStoreIngestUpdatesStxosHeight(t *testing.T) {
 	if len(keys) == 0 {
 		t.Fatal(err)
 	}
-	address := keyToAddress(keys[0], config.Params)
+	address, err := keyToAddress(keys[0], config.Params)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// Set up a previous txn where we received some utxos
 	outScript := client.OutScript{

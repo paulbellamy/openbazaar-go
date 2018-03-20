@@ -87,7 +87,7 @@ func validTxn(txn client.Transaction) error {
 }
 
 func (t *txStore) storeUtxos(txn client.Transaction, hash *chainhash.Hash) (value int, isRelevant, watchOnly bool) {
-	addrs := keysToAddresses(t.params, t.keyManager.GetKeys())
+	addrs, _ := keysToAddresses(t.params, t.keyManager.GetKeys())
 	for _, output := range txn.Outputs {
 		for _, addr := range addrs {
 			encodedAddr := addr.EncodeAddress()

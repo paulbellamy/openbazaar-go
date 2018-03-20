@@ -56,7 +56,7 @@ func NewWallet(config Config) (*Wallet, error) {
 	seed := b39.NewSeed(config.Mnemonic, "")
 	mPrivKey, _ := hd.NewMaster(seed, config.Params)
 	mPubKey, _ := mPrivKey.Neuter()
-	keyManager, err := keys.NewKeyManager(config.DB.Keys(), config.Params, mPrivKey, keys.Zcash)
+	keyManager, err := keys.NewKeyManager(config.DB.Keys(), config.Params, mPrivKey, keys.Zcash, keyToAddress)
 	if err != nil {
 		return nil, err
 	}
@@ -100,7 +100,12 @@ func (w *Wallet) onTxn(txn client.Transaction) error {
 }
 
 func (w *Wallet) loadInitialTransactions() {
-	txns, err := w.insight.GetTransactions(keysToAddresses(w.Params(), w.keyManager.GetKeys()))
+	addrs, err := keysToAddresses(w.Params(), w.keyManager.GetKeys())
+	if err != nil {
+		log.Error(err)
+		return
+	}
+	txns, err := w.insight.GetTransactions(addrs)
 	if err != nil {
 		log.Error(err)
 		return
@@ -165,28 +170,35 @@ func (w *Wallet) MasterPublicKey() *hd.ExtendedKey {
 // TODO: Use multiwallet for this
 func (w *Wallet) CurrentAddress(purpose wallet.KeyPurpose) btc.Address {
 	key, _ := w.keyManager.GetCurrentKey(purpose)
-	return keyToAddress(key, w.Params())
+	addr, _ := keyToAddress(key, w.Params())
+	return addr
 }
 
 // Returns a fresh address that has never been returned by this function
 func (w *Wallet) NewAddress(purpose wallet.KeyPurpose) btc.Address {
 	key, _ := w.keyManager.GetFreshKey(purpose)
-	addr := keyToAddress(key, w.Params())
+	addr, _ := keyToAddress(key, w.Params())
 	w.DB.Keys().MarkKeyAsUsed(addr.ScriptAddress())
 	return addr
 }
 
-func keysToAddresses(params *chaincfg.Params, keys []*hd.ExtendedKey) (addrs []btc.Address) {
+func keysToAddresses(params *chaincfg.Params, keys []*hd.ExtendedKey) (addrs []btc.Address, err error) {
 	for _, k := range keys {
-		addrs = append(addrs, keyToAddress(k, params))
+		addr, err := keyToAddress(k, params)
+		if err != nil {
+			return nil, err
+		}
+		addrs = append(addrs, addr)
 	}
-	return addrs
+	return addrs, nil
 }
 
-func keyToAddress(key *hd.ExtendedKey, params *chaincfg.Params) btc.Address {
-	pubkey, _ := key.ECPubKey()
-	addr, _ := zcashd.NewAddressPubKeyHash(btc.Hash160(pubkey.SerializeUncompressed()), params)
-	return addr
+func keyToAddress(key *hd.ExtendedKey, params *chaincfg.Params) (btc.Address, error) {
+	pubkey, err := key.ECPubKey()
+	if err != nil {
+		return nil, err
+	}
+	return zcashd.NewAddressPubKeyHash(btc.Hash160(pubkey.SerializeUncompressed()), params)
 }
 
 // Parse the address string and return an address interface

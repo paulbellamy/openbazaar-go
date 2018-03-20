@@ -1,10 +1,11 @@
 package keys
 
 import (
+	"errors"
 	"github.com/OpenBazaar/wallet-interface"
 	"github.com/btcsuite/btcd/chaincfg"
+	"github.com/btcsuite/btcutil"
 	hd "github.com/btcsuite/btcutil/hdkeychain"
-	"errors"
 )
 
 const LOOKAHEADWINDOW = 20
@@ -12,9 +13,9 @@ const LOOKAHEADWINDOW = 20
 type CoinType uint32
 
 const (
-	Bitcoin CoinType = 0
-	Litecoin = 1
-	Zcash = 133
+	Bitcoin     CoinType = 0
+	Litecoin             = 1
+	Zcash                = 133
 	BitcoinCash CoinType = 145
 )
 
@@ -26,9 +27,12 @@ type KeyManager struct {
 	externalKey *hd.ExtendedKey
 
 	coinType CoinType
+	getAddr  AddrFunc
 }
 
-func NewKeyManager(db wallet.Keys, params *chaincfg.Params, masterPrivKey *hd.ExtendedKey, coinType CoinType) (*KeyManager, error) {
+type AddrFunc func(k *hd.ExtendedKey, net *chaincfg.Params) (btcutil.Address, error)
+
+func NewKeyManager(db wallet.Keys, params *chaincfg.Params, masterPrivKey *hd.ExtendedKey, coinType CoinType, getAddr AddrFunc) (*KeyManager, error) {
 	internal, external, err := Bip44Derivation(masterPrivKey, coinType)
 	if err != nil {
 		return nil, err
@@ -38,6 +42,8 @@ func NewKeyManager(db wallet.Keys, params *chaincfg.Params, masterPrivKey *hd.Ex
 		params:      params,
 		internalKey: internal,
 		externalKey: external,
+		coinType:    coinType,
+		getAddr:     getAddr,
 	}
 	if err := km.lookahead(); err != nil {
 		return nil, err
@@ -104,7 +110,7 @@ func (km *KeyManager) GetFreshKey(purpose wallet.KeyPurpose) (*hd.ExtendedKey, e
 		}
 		index += 1
 	}
-	addr, err := childKey.Address(km.params)
+	addr, err := km.getAddr(childKey, km.params)
 	if err != nil {
 		return nil, err
 	}
