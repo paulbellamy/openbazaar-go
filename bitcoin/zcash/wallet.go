@@ -1,16 +1,19 @@
 package zcash
 
 import (
+	"encoding/hex"
 	"fmt"
 	"time"
 
 	"github.com/OpenBazaar/multiwallet/client"
 	"github.com/OpenBazaar/multiwallet/keys"
 	"github.com/OpenBazaar/openbazaar-go/bitcoin/zcashd"
+	"github.com/OpenBazaar/spvwallet"
 	wallet "github.com/OpenBazaar/wallet-interface"
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	btc "github.com/btcsuite/btcutil"
+	"github.com/btcsuite/btcutil/coinset"
 	hd "github.com/btcsuite/btcutil/hdkeychain"
 	"github.com/btcsuite/btcwallet/wallet/txrules"
 	"github.com/op/go-logging"
@@ -312,15 +315,94 @@ func (w *Wallet) Spend(amount int64, addr btc.Address, feeLevel wallet.FeeLevel)
 }
 
 func (w *Wallet) buildTxn(amount int64, addr btc.Address, feeLevel wallet.FeeLevel) ([]byte, error) {
-	// TODO: Calculate inputs
-	txn := &Transaction{
-		Inputs:  []Input{{Value: 1.234}},
-		Outputs: []client.Output{{Value: 1.234}},
+	// Check for dust
+	script, err := w.AddressToScript(addr)
+	if err != nil {
+		return nil, err
 	}
+	if txrules.IsDustAmount(btc.Amount(amount), len(script), txrules.DefaultRelayFeePerKb) {
+		return nil, wallet.ErrorDustAmount
+	}
+
+	inputs, err := w.buildTxnInputs(amount, feeLevel)
+	if err != nil {
+		return nil, err
+	}
+	outputs, err := w.buildTxnOutputs(amount, feeLevel, script)
+	if err != nil {
+		return nil, err
+	}
+	txn := &Transaction{Inputs: inputs, Outputs: outputs}
 	if err := w.sign(txn); err != nil {
 		return nil, err
 	}
 	return txn.MarshalBinary()
+}
+
+func (w *Wallet) buildTxnInputs(amount int64, feeLevel wallet.FeeLevel) ([]Input, error) {
+	//feePerKB := int64(w.GetFeePerByte(feeLevel)) * 1000
+	target := amount // TODO: + Fees
+	coinMap, err := w.gatherCoins()
+	if err != nil {
+		return nil, err
+	}
+	coins := make([]coinset.Coin, 0, len(coinMap))
+	for k := range coinMap {
+		coins = append(coins, k)
+	}
+	coinSelector := coinset.MaxValueAgeCoinSelector{MaxInputs: 10000, MinChangeAmount: btc.Amount(0)}
+	_, err = coinSelector.CoinSelect(btc.Amount(target), coins)
+	if err != nil {
+		return nil, wallet.ErrorInsuffientFunds
+	}
+
+	// TODO: Calculate inputs
+	return []Input{{Value: float64(target) / 1e8}}, nil
+}
+
+func (w *Wallet) gatherCoins() (map[coinset.Coin]*hd.ExtendedKey, error) {
+	height, _ := w.ChainTip()
+	utxos, err := w.DB.Utxos().GetAll()
+	if err != nil {
+		return nil, err
+	}
+	m := make(map[coinset.Coin]*hd.ExtendedKey)
+	for _, u := range utxos {
+		if u.WatchOnly {
+			continue
+		}
+		var confirmations int32
+		if u.AtHeight > 0 {
+			confirmations = int32(height) - u.AtHeight
+		}
+		c := spvwallet.NewCoin(u.Op.Hash.CloneBytes(), u.Op.Index, btc.Amount(u.Value), int64(confirmations), u.ScriptPubkey)
+		addr, err := w.ScriptToAddress(u.ScriptPubkey)
+		if err != nil {
+			continue
+		}
+		key, err := w.keyManager.GetKeyForScript(addr.ScriptAddress())
+		if err != nil {
+			continue
+		}
+		m[c] = key
+	}
+	return m, nil
+}
+
+// TODO: Check this against the spvwallet library
+// TODO: If last utxo has spare, make change
+// TODO: Handle and add fees into this
+func (w *Wallet) buildTxnOutputs(amount int64, feeLevel wallet.FeeLevel, outScript []byte) ([]client.Output, error) {
+	outputs := []client.Output{
+		client.Output{
+			Value: float64(amount) / 1e8, // TODO: Stop using floats! Insight api is rife with this crap
+			N:     0,
+			ScriptPubKey: client.OutScript{
+				Script: client.Script{Hex: hex.EncodeToString(outScript)},
+			},
+		},
+	}
+	return outputs, nil
 }
 
 // Bump the fee for the given transaction

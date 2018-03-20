@@ -1,6 +1,7 @@
 package zcash
 
 import (
+	"encoding/hex"
 	"fmt"
 	"reflect"
 	"strings"
@@ -451,9 +452,7 @@ func TestWalletChainTip(t *testing.T) {
 			getRawTransaction: func(txid string) ([]byte, error) { return nil, nil },
 		}, nil
 	}
-
-	config := testConfig(t)
-	w, err := NewWallet(config)
+	w, err := NewWallet(testConfig(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -545,27 +544,58 @@ func TestWalletGetConfirmations(t *testing.T) {
 	}
 }
 
-// TODO: Test insufficient funds
 // TODO: Test external insight api error
 // TODO: Calculate making change
+// TODO: Test unconfirmed utxos are not spent
 func TestWalletSpend(t *testing.T) {
+	blockHash, _ := chainhash.NewHashFromStr("a")
 	var sentTx []byte
-	sentTxHash, _ := chainhash.NewHashFromStr("a")
+	sentTxHash, _ := chainhash.NewHashFromStr("b")
 	newInsightClient = func(url string, proxyDialer proxy.Dialer) (InsightClient, error) {
 		return &FakeInsightClient{
+			getLatestBlock: func() (*client.Block, error) {
+				return &client.Block{Hash: blockHash.String(), Height: 1234}, nil
+			},
+			getTransactions:   func(addrs []btc.Address) ([]client.Transaction, error) { return nil, nil },
+			getRawTransaction: func(txid string) ([]byte, error) { return nil, nil },
 			broadcast: func(tx []byte) (string, error) {
 				sentTx = tx
 				return sentTxHash.String(), nil
 			},
 		}, nil
 	}
-	w, err := NewWallet(testConfig(t))
+
+	config := testConfig(t)
+	w, err := NewWallet(config)
 	if err != nil {
 		t.Fatal(err)
 	}
+	w.Start()
+	defer w.Close()
 
-	address := w.CurrentAddress(wallet.EXTERNAL)
-	var expectedAmount int64 = 123400000
+	address := w.NewAddress(wallet.EXTERNAL)
+	if _, err := config.DB.Keys().GetKey(address.ScriptAddress()); err != nil {
+		ks := config.DB.Keys().(*FakeKeys).keys
+		t.Fatal(err)
+	}
+	var expectedAmount int64 = 100000
+	inputHash, _ := chainhash.NewHashFromStr("c")
+	scriptPubkey, err := w.AddressToScript(address)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config.DB.Utxos().Put(wallet.Utxo{
+		Op:           wire.OutPoint{Hash: *inputHash, Index: 0},
+		ScriptPubkey: scriptPubkey,
+		AtHeight:     12,
+		Value:        50000000,
+	})
+	config.DB.Utxos().Put(wallet.Utxo{
+		Op:           wire.OutPoint{Hash: *inputHash, Index: 1},
+		ScriptPubkey: scriptPubkey,
+		AtHeight:     14,
+		Value:        1000000000,
+	})
 	txHash, err := w.Spend(expectedAmount, address, wallet.NORMAL)
 	if err != nil {
 		t.Fatal(err)
@@ -583,12 +613,67 @@ func TestWalletSpend(t *testing.T) {
 	if len(txn.Inputs) <= 0 {
 		t.Errorf("Expected some inputs, got: %d", len(txn.Inputs))
 	}
-	// Sum the output values
 	var outValue int64
 	for _, output := range txn.Outputs {
 		outValue += int64(output.Value * 1e8)
+
+		// Validate the outputs
+		script, err := hex.DecodeString(output.ScriptPubKey.Hex)
+		if err != nil {
+			t.Fatalf("error decoding output script: %v", err)
+		}
+		addr, err := w.ScriptToAddress(script)
+		if err != nil {
+			t.Errorf("error converting output script to address: %v", err)
+		} else if fmt.Sprint(addr) != fmt.Sprint(address) {
+			t.Errorf("Expected output address %v, got %v", address, addr)
+		}
 	}
+	// Check the sum of the output values
 	if outValue != expectedAmount {
 		t.Errorf("Expected amount %d, got outputs: %d", expectedAmount, outValue)
+	}
+}
+
+func TestWalletSpendRejectsDustAmounts(t *testing.T) {
+	w, err := NewWallet(testConfig(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	address := w.CurrentAddress(wallet.EXTERNAL)
+	txHash, err := w.Spend(1, address, wallet.NORMAL)
+	expectedError := wallet.ErrorDustAmount
+	if err == nil || err != expectedError {
+		t.Errorf("Expected error %q, got: %q", expectedError, err)
+	}
+	if txHash != nil {
+		t.Errorf("Expected null tx hash, got: %q", txHash)
+	}
+}
+
+func TestWalletSpendRejectsInsufficientFunds(t *testing.T) {
+	var expectedHeight uint32 = 5
+	expectedHash, _ := chainhash.NewHashFromStr("a")
+	newInsightClient = func(url string, proxyDialer proxy.Dialer) (InsightClient, error) {
+		return &FakeInsightClient{
+			getLatestBlock: func() (*client.Block, error) {
+				return &client.Block{Hash: expectedHash.String(), Height: int(expectedHeight)}, nil
+			},
+		}, nil
+	}
+	w, err := NewWallet(testConfig(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Wallet is empty
+	address := w.CurrentAddress(wallet.EXTERNAL)
+	txHash, err := w.Spend(123400000, address, wallet.NORMAL)
+	expectedError := wallet.ErrorInsuffientFunds
+	if err == nil || err != expectedError {
+		t.Errorf("Expected error %q, got: %q", expectedError, err)
+	}
+	if txHash != nil {
+		t.Errorf("Expected null tx hash, got: %q", txHash)
 	}
 }

@@ -83,7 +83,11 @@ func (t *Transaction) readOutputs(r io.Reader) error {
 		}
 		t.Outputs = append(t.Outputs, client.Output{
 			Value: float64(txOut.Value) / 1e8, // TODO: STOP USING FLOATS. ARGH! Insight api is rife with this crap.
-			// PkScript: txOut.PkScript,             // TODO: ???
+			ScriptPubKey: client.OutScript{
+				Script: client.Script{
+					Hex: hex.EncodeToString(txOut.PkScript),
+				},
+			},
 		})
 	}
 	return nil
@@ -184,9 +188,13 @@ func (t *Transaction) writeOutputs(w io.Writer) error {
 		return err
 	}
 	for _, output := range t.Outputs {
+		script, err := hex.DecodeString(output.ScriptPubKey.Hex)
+		if err != nil {
+			return err
+		}
 		txout := &wire.TxOut{
 			Value:    int64(output.Value * 1e8), // TODO: STOP USING FLOATS. ARGH! Insight api is rife with this crap.
-			PkScript: nil,                       // TODO: What do we put here?
+			PkScript: script,                    // TODO: What do we put here?
 		}
 		if err := wire.WriteTxOut(w, 0, 0, txout); err != nil {
 			return err
