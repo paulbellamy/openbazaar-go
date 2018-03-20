@@ -1,7 +1,6 @@
 package zcash
 
 import (
-	"bytes"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -81,8 +80,8 @@ func (m *FakeKeys) Put(scriptAddress []byte, keyPath wallet.KeyPath) error {
 
 func (m *FakeKeys) ImportKey(scriptAddress []byte, key *btcec.PrivateKey) error {
 	m.Do(m.init)
-	kp := wallet.KeyPath{Purpose: wallet.EXTERNAL, Index: -1}
-	m.keys[hex.EncodeToString(scriptAddress)] = &keyStoreEntry{scriptAddress, kp, false, key}
+	keyPath := wallet.KeyPath{Purpose: wallet.EXTERNAL, Index: -1}
+	m.keys[hex.EncodeToString(scriptAddress)] = &keyStoreEntry{scriptAddress, keyPath, false, key}
 	return nil
 }
 
@@ -91,11 +90,11 @@ func (m *FakeKeys) MarkKeyAsUsed(scriptAddress []byte) error {
 	if m.markKeyAsUsed != nil {
 		return m.markKeyAsUsed(scriptAddress)
 	}
-	key, ok := m.keys[hex.EncodeToString(scriptAddress)]
-	if !ok {
-		return errors.New("key does not exist")
+	k, err := m.getEntry(scriptAddress)
+	if err != nil {
+		return err
 	}
-	key.used = true
+	k.used = true
 	return nil
 }
 
@@ -110,28 +109,34 @@ func (m *FakeKeys) GetLastKeyIndex(purpose wallet.KeyPurpose) (int, bool, error)
 		}
 	}
 	if i == -1 {
-		return i, used, errors.New("No saved keys")
+		return i, used, errors.New("no saved keys")
 	}
 	return i, used, nil
 }
 
 func (m *FakeKeys) GetPathForKey(scriptAddress []byte) (wallet.KeyPath, error) {
 	m.Do(m.init)
-	key, ok := m.keys[hex.EncodeToString(scriptAddress)]
-	if !ok || key.path.Index == -1 {
-		return wallet.KeyPath{}, errors.New("key does not exist")
+	k, err := m.getEntry(scriptAddress)
+	if err != nil {
+		return wallet.KeyPath{}, err
 	}
-	return key.path, nil
+	return k.path, nil
 }
 
 func (m *FakeKeys) GetKey(scriptAddress []byte) (*btcec.PrivateKey, error) {
 	m.Do(m.init)
-	for _, k := range m.keys {
-		if k.path.Index == -1 && bytes.Equal(scriptAddress, k.scriptAddress) {
-			return k.key, nil
-		}
+	k, err := m.getEntry(scriptAddress)
+	if err != nil {
+		return nil, err
 	}
-	return nil, errors.New("Not found")
+	return k.key, nil
+}
+
+func (m *FakeKeys) getEntry(scriptAddress []byte) (*keyStoreEntry, error) {
+	if k, ok := m.keys[hex.EncodeToString(scriptAddress)]; ok {
+		return k, nil
+	}
+	return nil, errors.New("key not found")
 }
 
 func (m *FakeKeys) GetImported() ([]*btcec.PrivateKey, error) {
