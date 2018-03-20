@@ -61,15 +61,15 @@ func NewWallet(config Config) (*Wallet, error) {
 	mPubKey, _ := mPrivKey.Neuter()
 	keyManager, err := keys.NewKeyManager(config.DB.Keys(), config.Params, mPrivKey, keys.Zcash, keyToAddress)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("error initializing key manager: %v", err)
 	}
 	insight, err := newInsightClient(fmt.Sprintf("https://%s/api", config.TrustedPeer), config.Proxy)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("error initializing insight client: %v", err)
 	}
 	txStore, err := NewTxStore(config.Params, config.DB, keyManager)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("error initializing txstore: %v", err)
 	}
 
 	w := &Wallet{
