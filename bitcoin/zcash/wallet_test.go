@@ -575,7 +575,6 @@ func TestWalletSpend(t *testing.T) {
 
 	address := w.NewAddress(wallet.EXTERNAL)
 	if _, err := config.DB.Keys().GetKey(address.ScriptAddress()); err != nil {
-		ks := config.DB.Keys().(*FakeKeys).keys
 		t.Fatal(err)
 	}
 	var expectedAmount int64 = 100000

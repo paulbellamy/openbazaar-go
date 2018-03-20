@@ -63,7 +63,6 @@ func (t *Transaction) readInputs(r io.Reader) error {
 		if _, err := input.ReadFrom(r); err != nil {
 			return err
 		}
-		fmt.Printf("[DEBUG] Read input: %v\n", input)
 		t.Inputs = append(t.Inputs, input)
 	}
 	return nil
