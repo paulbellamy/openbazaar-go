@@ -324,11 +324,11 @@ func (w *Wallet) buildTxn(amount int64, addr btc.Address, feeLevel wallet.FeeLev
 		return nil, wallet.ErrorDustAmount
 	}
 
-	inputs, err := w.buildTxnInputs(amount, feeLevel)
+	inputs, total, err := w.buildTxnInputs(amount, feeLevel)
 	if err != nil {
 		return nil, err
 	}
-	outputs, err := w.buildTxnOutputs(amount, feeLevel, script)
+	outputs, err := w.buildTxnOutputs(amount, total-amount, script)
 	if err != nil {
 		return nil, err
 	}
@@ -339,25 +339,33 @@ func (w *Wallet) buildTxn(amount int64, addr btc.Address, feeLevel wallet.FeeLev
 	return txn.MarshalBinary()
 }
 
-func (w *Wallet) buildTxnInputs(amount int64, feeLevel wallet.FeeLevel) ([]Input, error) {
+func (w *Wallet) buildTxnInputs(amount int64, feeLevel wallet.FeeLevel) ([]Input, int64, error) {
 	//feePerKB := int64(w.GetFeePerByte(feeLevel)) * 1000
 	target := amount // TODO: + Fees
 	coinMap, err := w.gatherCoins()
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	coins := make([]coinset.Coin, 0, len(coinMap))
 	for k := range coinMap {
 		coins = append(coins, k)
 	}
 	coinSelector := coinset.MaxValueAgeCoinSelector{MaxInputs: 10000, MinChangeAmount: btc.Amount(0)}
-	_, err = coinSelector.CoinSelect(btc.Amount(target), coins)
+	selected, err := coinSelector.CoinSelect(btc.Amount(target), coins)
 	if err != nil {
-		return nil, wallet.ErrorInsuffientFunds
+		return nil, 0, wallet.ErrorInsuffientFunds
 	}
-
-	// TODO: Calculate inputs
-	return []Input{{Value: float64(target) / 1e8}}, nil
+	var inputs []Input
+	var total btc.Amount
+	for i, c := range selected.Coins() {
+		total += c.Value()
+		inputs = append(inputs, Input{
+			Txid: c.Hash().String(),
+			Vout: int(c.Index()),
+			N:    i,
+		})
+	}
+	return inputs, int64(total), nil
 }
 
 func (w *Wallet) gatherCoins() (map[coinset.Coin]*hd.ExtendedKey, error) {
@@ -390,15 +398,25 @@ func (w *Wallet) gatherCoins() (map[coinset.Coin]*hd.ExtendedKey, error) {
 }
 
 // TODO: Check this against the spvwallet library
-// TODO: If last utxo has spare, make change
 // TODO: Handle and add fees into this
-func (w *Wallet) buildTxnOutputs(amount int64, feeLevel wallet.FeeLevel, outScript []byte) ([]client.Output, error) {
+func (w *Wallet) buildTxnOutputs(amount, changeAmount int64, outScript []byte) ([]client.Output, error) {
+	changeScript, err := w.AddressToScript(w.CurrentAddress(wallet.INTERNAL))
+	if err != nil {
+		return nil, err
+	}
 	outputs := []client.Output{
 		client.Output{
 			Value: float64(amount) / 1e8, // TODO: Stop using floats! Insight api is rife with this crap
 			N:     0,
 			ScriptPubKey: client.OutScript{
 				Script: client.Script{Hex: hex.EncodeToString(outScript)},
+			},
+		},
+		client.Output{
+			Value: float64(changeAmount) / 1e8, // TODO: Stop using floats! Insight api is rife with this crap
+			N:     1,
+			ScriptPubKey: client.OutScript{
+				Script: client.Script{Hex: hex.EncodeToString(changeScript)},
 			},
 		},
 	}

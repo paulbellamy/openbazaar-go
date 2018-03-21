@@ -583,17 +583,19 @@ func TestWalletSpend(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	config.DB.Utxos().Put(wallet.Utxo{
+	utxo1 := wallet.Utxo{
 		Op:           wire.OutPoint{Hash: *inputHash, Index: 0},
 		ScriptPubkey: scriptPubkey,
 		AtHeight:     12,
-		Value:        50000000,
-	})
+		Value:        expectedAmount * 3,
+	}
+	var expectedChange int64 = utxo1.Value - expectedAmount
+	config.DB.Utxos().Put(utxo1)
 	config.DB.Utxos().Put(wallet.Utxo{
 		Op:           wire.OutPoint{Hash: *inputHash, Index: 1},
 		ScriptPubkey: scriptPubkey,
-		AtHeight:     14,
-		Value:        1000000000,
+		AtHeight:     1000,
+		Value:        expectedAmount - 10,
 	})
 	txHash, err := w.Spend(expectedAmount, address, wallet.NORMAL)
 	if err != nil {
@@ -608,29 +610,70 @@ func TestWalletSpend(t *testing.T) {
 	if err := txn.UnmarshalBinary(sentTx); err != nil {
 		t.Fatal(err)
 	}
-	// Check there are inputs
-	if len(txn.Inputs) <= 0 {
-		t.Errorf("Expected some inputs, got: %d", len(txn.Inputs))
-	}
-	var outValue int64
-	for _, output := range txn.Outputs {
-		outValue += int64(output.Value * 1e8)
+	// Check the are inputs
+	if len(txn.Inputs) != 1 {
+		t.Errorf("Expected 1 inputs, got: %d", len(txn.Inputs))
+	} else {
+		// Check the input is the expected utxo
+		if txn.Inputs[0].Txid != utxo1.Op.Hash.String() {
+			t.Errorf("Expected input txid %q, got input txid: %q", utxo1.Op.Hash.String(), txn.Inputs[0].Txid)
+		}
+		if txn.Inputs[0].Vout != int(utxo1.Op.Index) {
+			t.Errorf("Expected input vout %d, got input vout: %d", utxo1.Op.Index, txn.Inputs[0].Vout)
+		}
 
-		// Validate the outputs
-		script, err := hex.DecodeString(output.ScriptPubKey.Hex)
-		if err != nil {
-			t.Fatalf("error decoding output script: %v", err)
-		}
-		addr, err := w.ScriptToAddress(script)
-		if err != nil {
-			t.Errorf("error converting output script to address: %v", err)
-		} else if fmt.Sprint(addr) != fmt.Sprint(address) {
-			t.Errorf("Expected output address %v, got %v", address, addr)
+		// Check the N values
+		for i, input := range txn.Inputs {
+			if input.N != i {
+				t.Errorf("Expected input N == %d, got input N: %d", i, input.N)
+			}
 		}
 	}
-	// Check the sum of the output values
-	if outValue != expectedAmount {
-		t.Errorf("Expected amount %d, got outputs: %d", expectedAmount, outValue)
+
+	if len(txn.Outputs) != 2 {
+		t.Errorf("Expected 2 outputs, got: %d", len(txn.Outputs))
+	} else {
+		// Check main output
+		{
+			// Check the target is the expected address
+			script, err := hex.DecodeString(txn.Outputs[0].ScriptPubKey.Hex)
+			if err != nil {
+				t.Fatalf("error decoding output script: %v", err)
+			}
+			addr, err := w.ScriptToAddress(script)
+			if err != nil {
+				t.Errorf("error converting output script to address: %v", err)
+			} else if fmt.Sprint(addr) != fmt.Sprint(address) {
+				t.Errorf("Expected output address %v, got %v", address, addr)
+			}
+
+			// Check the sum of the output values
+			value := int64(txn.Outputs[0].Value * 1e8)
+			if value != expectedAmount {
+				t.Errorf("Expected amount %d, got outputs: %d", expectedAmount, value)
+			}
+		}
+
+		// Check the change output
+		{
+			// Check the target is our own
+			script, err := hex.DecodeString(txn.Outputs[1].ScriptPubKey.Hex)
+			if err != nil {
+				t.Fatalf("error decoding output script: %v", err)
+			}
+			addr, err := w.ScriptToAddress(script)
+			if err != nil {
+				t.Errorf("error converting output script to address: %v", err)
+			} else if fmt.Sprint(addr) != fmt.Sprint(w.CurrentAddress(wallet.INTERNAL)) {
+				t.Errorf("Expected output address %v, got %v", w.CurrentAddress(wallet.INTERNAL), addr)
+			}
+
+			// Check the sum of the output values is our expected amount
+			outValue := int64(txn.Outputs[1].Value * 1e8)
+			if outValue != expectedChange {
+				t.Errorf("Expected change %d, got outputs: %d", expectedChange, outValue)
+			}
+		}
 	}
 }
 
