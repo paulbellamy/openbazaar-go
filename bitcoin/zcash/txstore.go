@@ -33,8 +33,6 @@ func NewTxStore(params *chaincfg.Params, db wallet.Datastore, km *keys.KeyManage
 }
 
 // TODO: Check if we've already processed this txn, and update height accordingly
-// TODO: Check for double-spends
-// TODO: Check txn is relevant
 func (t *txStore) Ingest(txn client.Transaction, raw []byte) error {
 	if err := validTxn(txn); err != nil {
 		return err
@@ -50,7 +48,22 @@ func (t *txStore) Ingest(txn client.Transaction, raw []byte) error {
 		return nil
 	}
 
-	// TODO: Check if it is a relevant txn, and only store that.
+	// Check to see if this is a double spend
+	doubleSpends, err := t.CheckDoubleSpends(txn)
+	if err != nil {
+		return err
+	}
+	if len(doubleSpends) > 0 {
+		// First seen rule
+		if txn.BlockHeight == 0 {
+			return nil
+		} else {
+			// Mark any unconfirmed doubles as dead
+			for _, double := range doubleSpends {
+				t.markAsDead(double)
+			}
+		}
+	}
 
 	// Update utxos, and calculate value
 	value, isRelevant, watchOnly := t.storeUtxos(txn, hash)
@@ -91,7 +104,6 @@ func (t *txStore) storeUtxos(txn client.Transaction, hash *chainhash.Hash) (valu
 	for _, output := range txn.Outputs {
 		for _, addr := range addrs {
 			encodedAddr := addr.EncodeAddress()
-			// TODO: This equality check is probably too simplistic
 			matched := false
 			for _, a := range output.ScriptPubKey.Addresses {
 				if encodedAddr == a {
@@ -118,7 +130,7 @@ func (t *txStore) storeUtxos(txn client.Transaction, hash *chainhash.Hash) (valu
 				Op:           wire.OutPoint{Hash: *hash, Index: uint32(output.N)},
 				AtHeight:     int32(txn.BlockHeight),
 				Value:        int64(output.Value * 1e8), // TODO: Eugh. Floats :(
-				ScriptPubkey: scriptBytes,               // TODO: Don't think this is right...
+				ScriptPubkey: scriptBytes,
 				WatchOnly:    false,
 			}
 			if err := t.db.Utxos().Put(utxo); err != nil {
@@ -196,4 +208,93 @@ func hasMatchingStxo(stxos []wallet.Stxo, hash *chainhash.Hash) (wallet.Stxo, bo
 		}
 	}
 	return wallet.Stxo{}, false
+}
+
+// GetDoubleSpends takes a transaction and compares it with
+// all transactions in the db.  It returns a slice of all txids in the db
+// which are double spent by the received tx.
+func (t *txStore) CheckDoubleSpends(arg client.Transaction) ([]string, error) {
+	var dubs []string // slice of all double-spent txs
+	txs, err := t.db.Txns().GetAll(true)
+	if err != nil {
+		return dubs, err
+	}
+	for _, comp := range txs {
+		if comp.Height < 0 {
+			continue
+		}
+		var compTx Transaction
+		if err := compTx.UnmarshalBinary(comp.Bytes); err != nil {
+			return dubs, err
+		}
+		for _, argIn := range arg.Inputs {
+			// iterate through inputs of comp
+			for _, compIn := range compTx.Inputs {
+				if argIn.Txid == compIn.Txid && argIn.Vout == compIn.Vout && comp.Txid != arg.Txid {
+					// found double spend
+					dubs = append(dubs, comp.Txid)
+					break // back to argIn loop
+				}
+			}
+		}
+	}
+	return dubs, nil
+}
+
+func (t *txStore) markAsDead(txid string) error {
+	stxos, err := t.db.Stxos().GetAll()
+	if err != nil {
+		return err
+	}
+	markStxoAsDead := func(s wallet.Stxo) error {
+		err := t.db.Stxos().Delete(s)
+		if err != nil {
+			return err
+		}
+		err = t.db.Txns().UpdateHeight(s.SpendTxid, -1)
+		if err != nil {
+			return err
+		}
+		return nil
+	}
+	for _, s := range stxos {
+		// If an stxo is marked dead, move it back into the utxo table
+		if txid == s.SpendTxid.String() {
+			if err := markStxoAsDead(s); err != nil {
+				return err
+			}
+			if err := t.db.Utxos().Put(s.Utxo); err != nil {
+				return err
+			}
+		}
+		// If a dependency of the spend is dead then mark the spend as dead
+		if txid == s.Utxo.Op.Hash.String() {
+			if err := markStxoAsDead(s); err != nil {
+				return err
+			}
+			if err := t.markAsDead(s.SpendTxid.String()); err != nil {
+				return err
+			}
+		}
+	}
+	utxos, err := t.db.Utxos().GetAll()
+	if err != nil {
+		return err
+	}
+	// Dead utxos should just be deleted
+	for _, u := range utxos {
+		if txid == u.Op.Hash.String() {
+			err := t.db.Utxos().Delete(u)
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	txidHash, err := chainhash.NewHashFromStr(txid)
+	if err != nil {
+		return err
+	}
+	t.db.Txns().UpdateHeight(*txidHash, -1)
+	return nil
 }

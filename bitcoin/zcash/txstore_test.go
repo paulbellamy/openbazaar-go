@@ -3,6 +3,7 @@ package zcash
 import (
 	"encoding/hex"
 	"testing"
+	"time"
 
 	"github.com/OpenBazaar/multiwallet/client"
 	"github.com/OpenBazaar/multiwallet/keys"
@@ -78,6 +79,178 @@ func TestTxStoreIngestIgnoresDuplicates(t *testing.T) {
 	}
 	if len(txns) != 1 {
 		t.Errorf("Expected 1 txn, got: %d", len(txns))
+	}
+}
+
+func TestTxStoreIngestIgnoresUnconfirmedDoubleSpends(t *testing.T) {
+	config := testConfig(t)
+	seed := b39.NewSeed(config.Mnemonic, "")
+	mPrivKey, _ := hd.NewMaster(seed, config.Params)
+	keyManager, err := keys.NewKeyManager(config.DB.Keys(), config.Params, mPrivKey, keys.Zcash, keyToAddress)
+	if err != nil {
+		t.Fatal(err)
+	}
+	txStore, err := NewTxStore(config.Params, config.DB, keyManager)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys := keyManager.GetKeys()
+	if len(keys) == 0 {
+		t.Fatal(err)
+	}
+	address, err := keyToAddress(keys[0], config.Params)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	receivedTxid, _ := chainhash.NewHashFromStr("a")
+	spentTxid, _ := chainhash.NewHashFromStr("b")
+	existingTxn := client.Transaction{
+		Version:       1,
+		Txid:          spentTxid.String(),
+		BlockHeight:   1,
+		Confirmations: 10,
+		Inputs:        []client.Input{{Txid: receivedTxid.String(), Vout: 0}},
+		Outputs: []client.Output{
+			{
+				ScriptPubKey: client.OutScript{
+					Addresses: []string{address.EncodeAddress()},
+					Type:      "pubkeyhash",
+				},
+				Value: 1.234,
+				N:     0,
+			},
+		},
+	}
+	if err := txStore.Ingest(existingTxn, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	// Check our existing txn was added
+	txns, err := config.DB.Txns().GetAll(true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(txns) != 1 {
+		t.Errorf("Expected 1 txn, got: %d", len(txns))
+	}
+
+	newHash, _ := chainhash.NewHashFromStr("b")
+	txn := client.Transaction{
+		Version:       1,
+		Txid:          newHash.String(),
+		BlockHeight:   11,
+		Confirmations: 0,
+		Inputs:        []client.Input{{Txid: receivedTxid.String(), Vout: 0}},
+		Outputs: []client.Output{
+			{
+				ScriptPubKey: client.OutScript{
+					Addresses: []string{address.EncodeAddress()},
+					Type:      "pubkeyhash",
+				},
+				Value: 1.234,
+				N:     0,
+			},
+		},
+	}
+	if err := txStore.Ingest(txn, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	txns, err = config.DB.Txns().GetAll(true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(txns) != 1 {
+		t.Errorf("Expected 1 txn, got: %d", len(txns))
+	}
+}
+
+func TestTxStoreIngestMarksExistingDoubleSpendsAsDead(t *testing.T) {
+	config := testConfig(t)
+	seed := b39.NewSeed(config.Mnemonic, "")
+	mPrivKey, _ := hd.NewMaster(seed, config.Params)
+	keyManager, err := keys.NewKeyManager(config.DB.Keys(), config.Params, mPrivKey, keys.Zcash, keyToAddress)
+	if err != nil {
+		t.Fatal(err)
+	}
+	txStore, err := NewTxStore(config.Params, config.DB, keyManager)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys := keyManager.GetKeys()
+	if len(keys) == 0 {
+		t.Fatal(err)
+	}
+	address, err := keyToAddress(keys[0], config.Params)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	receivedTxid, _ := chainhash.NewHashFromStr("a")
+	spentTxid, _ := chainhash.NewHashFromStr("b")
+	existingOutputs := []client.Output{
+		{
+			ScriptPubKey: client.OutScript{
+				Addresses: []string{address.EncodeAddress()},
+				Type:      "pubkeyhash",
+			},
+			Value: 1.234,
+			N:     0,
+		},
+	}
+	existingTxn := client.Transaction{
+		Version:       1,
+		Txid:          spentTxid.String(),
+		BlockHeight:   1,
+		Confirmations: 10,
+		Inputs:        []client.Input{{Txid: receivedTxid.String(), Vout: 0}},
+		Outputs:       existingOutputs,
+	}
+	// Eugh, we need 2 different types here (only one is serializable).
+	existingBytes, err := (&Transaction{
+		Version:   1,
+		Inputs:    []Input{{Txid: receivedTxid.String(), Vout: 0}},
+		Outputs:   existingOutputs,
+		Timestamp: time.Now(),
+	}).MarshalBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := txStore.Ingest(existingTxn, existingBytes); err != nil {
+		t.Fatal(err)
+	}
+
+	// Check our existing txn was added
+	utxos, err := config.DB.Utxos().GetAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(utxos) != 1 {
+		t.Errorf("Expected old utxo to have been added")
+	}
+
+	doubleTxid, _ := chainhash.NewHashFromStr("c")
+	txn := client.Transaction{
+		Version:       1,
+		Txid:          doubleTxid.String(),
+		BlockHeight:   9,
+		Confirmations: 2,
+		Inputs:        []client.Input{{Txid: receivedTxid.String(), Vout: 0}},
+		Outputs:       existingOutputs, // Doesn't matter as long as it is relevant
+	}
+	if err := txStore.Ingest(txn, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	utxos, err = config.DB.Utxos().GetAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, u := range utxos {
+		if u.Op.Hash.String() == existingTxn.Txid {
+			t.Errorf("Expected old utxo to have been removed")
+		}
 	}
 }
 

@@ -14,6 +14,7 @@ import (
 	"github.com/OpenBazaar/multiwallet/keys"
 	"github.com/OpenBazaar/openbazaar-go/bitcoin/zcashd"
 	wallet "github.com/OpenBazaar/wallet-interface"
+	"github.com/btcsuite/btcd/btcec"
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/wire"
@@ -620,6 +621,28 @@ func TestWalletSpend(t *testing.T) {
 		}
 		if txn.Inputs[0].Vout != int(utxo1.Op.Index) {
 			t.Errorf("Expected input vout %d, got input vout: %d", utxo1.Op.Index, txn.Inputs[0].Vout)
+		}
+
+		// Check the input signature
+		signingKey, err := w.keyManager.GetKeyForScript(utxo1.ScriptPubkey)
+		if err != nil {
+			t.Fatalf("error finding signing key: %v", err)
+		}
+		rawSig, err := hex.DecodeString(txn.Inputs[0].ScriptSig.Hex)
+		if err != nil {
+			t.Fatalf("error decoding signature hex: %v", err)
+		}
+		sig, err := btcec.ParseSignature(rawSig, btcec.S256()) // TODO: Check this is the right curve
+		if err != nil {
+			t.Fatalf("error decoding signature: %v", err)
+		}
+		pubKey, err := signingKey.ECPubKey()
+		if err != nil {
+			t.Fatal(err)
+		}
+		//if !sig.Verify(chainhash.DoubleHashB(txn.Inputs[0].ScriptPubkey), pubKey) {
+		if !sig.Verify(chainhash.DoubleHashB(nil), pubKey) {
+			t.Errorf("Expected input signature did not verify")
 		}
 
 		// Check the N values
