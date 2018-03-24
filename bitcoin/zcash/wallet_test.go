@@ -575,7 +575,8 @@ func TestWalletSpend(t *testing.T) {
 	defer w.Close()
 
 	address := w.NewAddress(wallet.EXTERNAL)
-	if _, err := config.DB.Keys().GetKey(address.ScriptAddress()); err != nil {
+	signingKey, err := config.DB.Keys().GetKey(address.ScriptAddress())
+	if err != nil {
 		t.Fatal(err)
 	}
 	var expectedAmount int64 = 100000
@@ -624,24 +625,23 @@ func TestWalletSpend(t *testing.T) {
 		}
 
 		// Check the input signature
-		signingKey, err := w.keyManager.GetKeyForScript(utxo1.ScriptPubkey)
-		if err != nil {
-			t.Fatalf("error finding signing key: %v", err)
-		}
 		rawSig, err := hex.DecodeString(txn.Inputs[0].ScriptSig.Hex)
 		if err != nil {
 			t.Fatalf("error decoding signature hex: %v", err)
 		}
+		fmt.Printf("[DEBUG] Input hex: %v\n", txn.Inputs[0].ScriptSig.Hex)
 		sig, err := btcec.ParseSignature(rawSig, btcec.S256()) // TODO: Check this is the right curve
 		if err != nil {
 			t.Fatalf("error decoding signature: %v", err)
 		}
-		pubKey, err := signingKey.ECPubKey()
+		// TODO: Eugh, might need to refactor ScriptSig? So we have the script as
+		// well? What is this script passed as an arg here? see:
+		// https://github.com/zcash/zcash/blob/8487be83607826667261733a9f28bfebdff11b51/src/script/interpreter.cpp#L1004
+		hash, err := txn.InputSignatureHash(w.Params(), txn.Inputs[0].Script, 0, SigHashAll, w.DB.Keys(), uint32(0))
 		if err != nil {
-			t.Fatal(err)
+			t.Fatalf("error hashing transaction: %v", err)
 		}
-		//if !sig.Verify(chainhash.DoubleHashB(txn.Inputs[0].ScriptPubkey), pubKey) {
-		if !sig.Verify(chainhash.DoubleHashB(nil), pubKey) {
+		if !sig.Verify(hash, signingKey.PubKey()) {
 			t.Errorf("Expected input signature did not verify")
 		}
 

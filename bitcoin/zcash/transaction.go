@@ -300,6 +300,11 @@ func (i *Input) writeOutPoint(w io.Writer) error {
 	return binary.Write(w, binary.LittleEndian, uint32(i.Vout))
 }
 
+func (i *Input) PreviousOutPoint() string {
+	hash, _ := chainhash.NewHashFromStr(i.Txid)
+	return fmt.Sprintf("%v:%d", hash, i.Vout)
+}
+
 type Script struct {
 	Hex string `json:"hex"`
 	Asm string `json:"asm"`

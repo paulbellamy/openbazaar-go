@@ -4,12 +4,14 @@ import (
 	"testing"
 )
 
-func TestWalletSign(t *testing.T) {
+func TestTransactionSign(t *testing.T) {
+	t.Errorf("pending")
 	w, _ := NewWallet(testConfig(t))
 	txn := &Transaction{
 		Inputs: []Input{{}},
 	}
-	if err := w.sign(txn); err != nil {
+	additionalPrevScripts := make(map[string][]byte)
+	if err := txn.Sign(w.Params(), w.DB.Keys(), additionalPrevScripts, SigHashAll, uint32(0)); err != nil {
 		t.Fatal(err)
 	}
 

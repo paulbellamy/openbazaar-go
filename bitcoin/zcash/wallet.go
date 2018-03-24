@@ -324,7 +324,7 @@ func (w *Wallet) buildTxn(amount int64, addr btc.Address, feeLevel wallet.FeeLev
 		return nil, wallet.ErrorDustAmount
 	}
 
-	inputs, total, err := w.buildTxnInputs(amount, feeLevel)
+	inputs, total, additionalPrevScripts, err := w.buildTxnInputs(amount, feeLevel)
 	if err != nil {
 		return nil, err
 	}
@@ -333,18 +333,19 @@ func (w *Wallet) buildTxn(amount int64, addr btc.Address, feeLevel wallet.FeeLev
 		return nil, err
 	}
 	txn := &Transaction{Inputs: inputs, Outputs: outputs}
-	if err := w.sign(txn); err != nil {
+	consensusBranchId := uint32(0) // TODO: Figure this out for overwindter w.CurrentEpochBranchId(chainActive.Height() + 1, w.Params().GetConsensus())
+	if err := txn.Sign(w.Params(), w.DB.Keys(), additionalPrevScripts, SigHashAll, consensusBranchId); err != nil {
 		return nil, err
 	}
 	return txn.MarshalBinary()
 }
 
-func (w *Wallet) buildTxnInputs(amount int64, feeLevel wallet.FeeLevel) ([]Input, int64, error) {
+func (w *Wallet) buildTxnInputs(amount int64, feeLevel wallet.FeeLevel) ([]Input, int64, map[string][]byte, error) {
 	//feePerKB := int64(w.GetFeePerByte(feeLevel)) * 1000
 	target := amount // TODO: + Fees
 	coinMap, err := w.gatherCoins()
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, nil, err
 	}
 	coins := make([]coinset.Coin, 0, len(coinMap))
 	for k := range coinMap {
@@ -353,19 +354,22 @@ func (w *Wallet) buildTxnInputs(amount int64, feeLevel wallet.FeeLevel) ([]Input
 	coinSelector := coinset.MaxValueAgeCoinSelector{MaxInputs: 10000, MinChangeAmount: btc.Amount(0)}
 	selected, err := coinSelector.CoinSelect(btc.Amount(target), coins)
 	if err != nil {
-		return nil, 0, wallet.ErrorInsuffientFunds
+		return nil, 0, nil, wallet.ErrorInsuffientFunds
 	}
 	var inputs []Input
 	var total btc.Amount
+	additionalPrevScripts := make(map[string][]byte)
 	for i, c := range selected.Coins() {
-		total += c.Value()
-		inputs = append(inputs, Input{
+		input := Input{
 			Txid: c.Hash().String(),
 			Vout: int(c.Index()),
 			N:    i,
-		})
+		}
+		inputs = append(inputs, input)
+		total += c.Value()
+		additionalPrevScripts[input.PreviousOutPoint()] = c.PkScript()
 	}
-	return inputs, int64(total), nil
+	return inputs, int64(total), nil, nil
 }
 
 func (w *Wallet) gatherCoins() (map[coinset.Coin]*hd.ExtendedKey, error) {
