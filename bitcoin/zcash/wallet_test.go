@@ -625,19 +625,16 @@ func TestWalletSpend(t *testing.T) {
 		}
 
 		// Check the input signature
-		rawSig, err := hex.DecodeString(txn.Inputs[0].ScriptSig.Hex)
+		scriptCode, err := hex.DecodeString(txn.Inputs[0].ScriptSig.Hex)
 		if err != nil {
 			t.Fatalf("error decoding signature hex: %v", err)
 		}
 		fmt.Printf("[DEBUG] Input hex: %v\n", txn.Inputs[0].ScriptSig.Hex)
-		sig, err := btcec.ParseSignature(rawSig, btcec.S256()) // TODO: Check this is the right curve
+		sig, err := btcec.ParseSignature(scriptCode, btcec.S256()) // TODO: Check this is the right curve
 		if err != nil {
 			t.Fatalf("error decoding signature: %v", err)
 		}
-		// TODO: Eugh, might need to refactor ScriptSig? So we have the script as
-		// well? What is this script passed as an arg here? see:
-		// https://github.com/zcash/zcash/blob/8487be83607826667261733a9f28bfebdff11b51/src/script/interpreter.cpp#L1004
-		hash, err := txn.InputSignatureHash(w.Params(), txn.Inputs[0].Script, 0, SigHashAll, w.DB.Keys(), uint32(0))
+		hash, err := txn.InputSignatureHash(scriptCode, 0, SigHashAll, uint32(0))
 		if err != nil {
 			t.Fatalf("error hashing transaction: %v", err)
 		}
