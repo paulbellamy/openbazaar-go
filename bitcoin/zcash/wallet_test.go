@@ -14,7 +14,6 @@ import (
 	"github.com/OpenBazaar/multiwallet/keys"
 	"github.com/OpenBazaar/openbazaar-go/bitcoin/zcashd"
 	wallet "github.com/OpenBazaar/wallet-interface"
-	"github.com/btcsuite/btcd/btcec"
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/wire"
@@ -575,8 +574,11 @@ func TestWalletSpend(t *testing.T) {
 	defer w.Close()
 
 	address := w.NewAddress(wallet.EXTERNAL)
-	signingKey, err := config.DB.Keys().GetKey(address.ScriptAddress())
+	key, err := w.MasterPrivateKey().ECPrivKey()
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.DB.Keys().ImportKey(address.ScriptAddress(), key); err != nil {
 		t.Fatal(err)
 	}
 	var expectedAmount int64 = 100000
@@ -625,21 +627,23 @@ func TestWalletSpend(t *testing.T) {
 		}
 
 		// Check the input signature
-		scriptCode, err := hex.DecodeString(txn.Inputs[0].ScriptSig.Hex)
+		signingKey, err := w.MasterPrivateKey().ECPubKey()
 		if err != nil {
-			t.Fatalf("error decoding signature hex: %v", err)
+			t.Fatal(err)
 		}
-		fmt.Printf("[DEBUG] Input hex: %v\n", txn.Inputs[0].ScriptSig.Hex)
-		sig, err := btcec.ParseSignature(scriptCode, btcec.S256()) // TODO: Check this is the right curve
-		if err != nil {
-			t.Fatalf("error decoding signature: %v", err)
+		txCopy := txn.shallowCopy()
+		for i := range txCopy.Inputs {
+			// Eugh, because we replace the ScriptSig from the script to the
+			// signature, we need an unsigned copy of the txn to verify it. This
+			// feels really wrong and needs a refactor... :/
+			unsignedScript, err := w.AddressToScript(address)
+			if err != nil {
+				t.Fatal(err)
+			}
+			txCopy.Inputs[i].ScriptSig.Hex = hex.EncodeToString(unsignedScript)
 		}
-		hash, err := txn.InputSignatureHash(scriptCode, 0, SigHashAll, uint32(0))
-		if err != nil {
-			t.Fatalf("error hashing transaction: %v", err)
-		}
-		if !sig.Verify(hash, signingKey.PubKey()) {
-			t.Errorf("Expected input signature did not verify")
+		if err := verifySignature(txCopy, signingKey, 0, txn.Inputs[0].ScriptSig.Hex); err != nil {
+			t.Error(err)
 		}
 
 		// Check the N values

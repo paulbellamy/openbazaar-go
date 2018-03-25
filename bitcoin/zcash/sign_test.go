@@ -3,12 +3,14 @@ package zcash
 import (
 	"encoding/hex"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/OpenBazaar/wallet-interface"
 	"github.com/btcsuite/btcd/btcec"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
+	"github.com/btcsuite/btcd/txscript"
 )
 
 func TestTransactionSign(t *testing.T) {
@@ -40,8 +42,8 @@ func TestTransactionSign(t *testing.T) {
 			},
 		},
 	}
-	additionalPrevScripts := map[string][]byte{txHash.String() + ":0": script}
-	if err := txn.Sign(w.Params(), w.DB.Keys(), additionalPrevScripts, SigHashAll, uint32(0)); err != nil {
+	signed, err := w.Sign(txn, SigHashAll, uint32(0))
+	if err != nil {
 		t.Fatal(err)
 	}
 
@@ -55,33 +57,60 @@ func TestTransactionSign(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	pkData := signingKey.SerializeCompressed()
-	scriptCode, err := hex.DecodeString(txn.Inputs[0].ScriptSig.Hex)
+	if err := verifySignature(txn, signingKey, 0, signed.Inputs[0].ScriptSig.Hex); err != nil {
+		t.Error(err)
+	}
+}
+
+func verifySignature(txn *Transaction, signingKey *btcec.PublicKey, nIn int, sigHex string) error {
+	scriptCode, err := hex.DecodeString(sigHex)
 	if err != nil {
-		t.Fatalf("error decoding signature hex: %v", err)
+		return err
 	}
-	fmt.Printf("[DEBUG] Input hex: %v\n", txn.Inputs[0].ScriptSig.Hex)
-	var sig *btcec.Signature
-	var foundHashType SigHashType
-	scriptCodeWithoutPKData := scriptCode[:len(scriptCode)-len(pkData)-1]
-	for i := 0; i < len(scriptCodeWithoutPKData)-1; i++ {
-		sig, err = btcec.ParseDERSignature(scriptCodeWithoutPKData[i:len(scriptCodeWithoutPKData)-i], btcec.S256())
-		if err == nil {
-			break
-		}
-		foundHashType = SigHashType(scriptCodeWithoutPKData[len(scriptCodeWithoutPKData)-i-1])
-	}
-	if sig == nil {
-		t.Fatalf("Could not find signature in output scriptsig")
-	}
-	if foundHashType != SigHashAll {
-		t.Fatalf("Expected sig hash type SigHashAll (%v), got: %v", SigHashAll, foundHashType)
-	}
-	hash, err := txn.InputSignatureHash(scriptCode, 0, SigHashAll, uint32(0))
+	sig, hashType, pkData, err := disasmSignature(scriptCode)
 	if err != nil {
-		t.Fatalf("error hashing transaction: %v", err)
+		return err
+	}
+	if hashType != SigHashAll {
+		return fmt.Errorf("Expected sig hash type SigHashAll (%v), got: %v", SigHashAll, hashType)
+	}
+	if hex.EncodeToString(pkData) != hex.EncodeToString(signingKey.SerializeCompressed()) {
+		return fmt.Errorf("Expected pkData to be %v, got: %v", hex.EncodeToString(signingKey.SerializeCompressed()), hex.EncodeToString(pkData))
+	}
+	hash, err := txn.InputSignatureHash(scriptCode, nIn, SigHashAll, uint32(0))
+	if err != nil {
+		return fmt.Errorf("error hashing transaction: %v", err)
 	}
 	if !sig.Verify(hash, signingKey) {
-		t.Errorf("Expected input signature did not verify")
+		return fmt.Errorf("Expected input signature did not verify")
 	}
+	return nil
+}
+
+func disasmSignature(scriptCode []byte) (sig *btcec.Signature, hashType SigHashType, pkData []byte, err error) {
+	disassembled, err := txscript.DisasmString(scriptCode)
+	if err != nil {
+		return nil, 0, nil, err
+	}
+	parts := strings.SplitN(disassembled, " ", 2)
+	if len(parts) != 2 {
+		return nil, 0, nil, fmt.Errorf("Found not enough parts to disassembled signature: %v", parts)
+	}
+	byteParts := make([][]byte, len(parts))
+	for i, p := range parts {
+		byteParts[i], err = hex.DecodeString(p)
+		if err != nil {
+			return nil, 0, nil, err
+		}
+	}
+	sig, err = btcec.ParseDERSignature(byteParts[0][:len(byteParts[0])-1], btcec.S256())
+	if err != nil {
+		return nil, 0, nil, err
+	}
+	hashType = SigHashType(byteParts[0][len(byteParts[0])-1])
+	pkData, err = hex.DecodeString(parts[1])
+	if err != nil {
+		return nil, 0, nil, err
+	}
+	return sig, hashType, pkData, nil
 }

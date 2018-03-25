@@ -6,45 +6,46 @@ import (
 	"encoding/hex"
 	"fmt"
 
-	"github.com/OpenBazaar/openbazaar-go/bitcoin/zcashd"
-	wallet "github.com/OpenBazaar/wallet-interface"
+	"github.com/OpenBazaar/multiwallet/client"
 	"github.com/btcsuite/btcd/btcec"
-	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/txscript"
 )
 
-func (t *Transaction) Sign(
-	params *chaincfg.Params,
-	keys wallet.Keys,
-	additionalPrevScripts map[string][]byte,
+func (w *Wallet) Sign(
+	t *Transaction,
 	hashType SigHashType,
 	consensusBranchId uint32,
-) error {
+) (*Transaction, error) {
+	t = t.shallowCopy()
 	for i, input := range t.Inputs {
-		prevOutScript := additionalPrevScripts[input.PreviousOutPoint()]
-		address, err := zcashd.ExtractPkScriptAddrs(prevOutScript, params)
+		prevOutScript, err := hex.DecodeString(input.ScriptSig.Hex)
 		if err != nil {
-			return err
+			return nil, fmt.Errorf("could not decide previous script for %v", input.PreviousOutPoint())
 		}
-		key, err := keys.GetKey(address.ScriptAddress())
+		address, err := w.ScriptToAddress(prevOutScript)
 		if err != nil {
-			return fmt.Errorf("could not find key for tx: %v", err)
+			return nil, err
+		}
+		key, err := w.DB.Keys().GetKey(address.ScriptAddress())
+		if err != nil {
+			return nil, fmt.Errorf("could not find key for tx: %v", err)
 		}
 		signature, err := t.InputSignature(prevOutScript, i, hashType, consensusBranchId, key)
 		if err != nil {
-			return fmt.Errorf("failed to sign transaction: %v", err)
+			return nil, fmt.Errorf("failed to sign transaction: %v", err)
 		}
 		pk := (*btcec.PublicKey)(&key.PublicKey)
 		// TODO: Check if we ever need to do the uncompressed...
+
 		scriptSig, err := txscript.NewScriptBuilder().AddData(signature).AddData(pk.SerializeCompressed()).Script()
 		if err != nil {
-			return err
+			return nil, err
 		}
 
 		t.Inputs[i].ScriptSig = Script{Hex: hex.EncodeToString(scriptSig)}
 	}
-	return nil
+	return t, nil
 }
 
 func (t *Transaction) InputSignature(
@@ -83,10 +84,7 @@ func (t *Transaction) InputSignatureHash(
 	}
 
 	// Wrapper to serialize only the necessary parts of the transaction being signed
-	txTmp, err := t.txTmp(scriptCode, nIn, hashType)
-	if err != nil {
-		return nil, err
-	}
+	txTmp := t.txTmp(scriptCode, nIn, hashType)
 
 	// Serialize and hash
 	buf := &bytes.Buffer{}
@@ -99,21 +97,17 @@ func (t *Transaction) InputSignatureHash(
 	return chainhash.DoubleHashB(buf.Bytes()), nil
 }
 
-func (t *Transaction) txTmp(scriptCode []byte, nIn int, hashType SigHashType) (*Transaction, error) {
-	txCopy := Transaction{
-		Version:   t.Version,
-		Timestamp: t.Timestamp,
-	}
+func (t *Transaction) txTmp(scriptCode []byte, nIn int, hashType SigHashType) *Transaction {
+	txCopy := t.shallowCopy()
 	if hashType == SigHashAnyOneCanPay {
 		// Only selected input
-		txCopy.Inputs = t.Inputs[nIn:1]
+		txCopy.Inputs = txCopy.Inputs[nIn:1]
 	} else {
 		// all inputs, with other signatures blanked
-		for i, input := range t.Inputs {
+		for i := range t.Inputs {
 			if i != nIn {
-				input.ScriptSig = Script{}
+				txCopy.Inputs[i].ScriptSig = Script{}
 			}
-			txCopy.Inputs = append(txCopy.Inputs, input)
 		}
 	}
 
@@ -121,12 +115,27 @@ func (t *Transaction) txTmp(scriptCode []byte, nIn int, hashType SigHashType) (*
 	case SigHashNone:
 		txCopy.Outputs = nil
 	case SigHashSingle:
-		txCopy.Outputs = t.Outputs[nIn:1]
-	default:
-		txCopy.Outputs = t.Outputs
+		txCopy.Outputs = txCopy.Outputs[nIn:1]
 	}
 
 	// TODO: Joinsplits
 
-	return &txCopy, nil
+	return txCopy
+}
+
+func (t *Transaction) shallowCopy() *Transaction {
+	txCopy := &Transaction{
+		Version:   t.Version,
+		Timestamp: t.Timestamp,
+		Inputs:    make([]Input, len(t.Inputs)),
+		Outputs:   make([]client.Output, len(t.Outputs)),
+	}
+	for i, input := range t.Inputs {
+		txCopy.Inputs[i] = input
+	}
+	for i, output := range t.Outputs {
+		txCopy.Outputs[i] = output
+	}
+	// TODO: Joinsplits
+	return txCopy
 }
