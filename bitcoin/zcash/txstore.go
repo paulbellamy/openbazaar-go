@@ -1,6 +1,7 @@
 package zcash
 
 import (
+	"bytes"
 	"encoding/hex"
 	"fmt"
 	"time"
@@ -219,20 +220,25 @@ func (t *txStore) CheckDoubleSpends(arg client.Transaction) ([]string, error) {
 	if err != nil {
 		return dubs, err
 	}
-	for _, comp := range txs {
-		if comp.Height < 0 {
+	for _, compTx := range txs {
+		if compTx.Height < 0 {
 			continue
 		}
-		var compTx Transaction
-		if err := compTx.UnmarshalBinary(comp.Bytes); err != nil {
-			return dubs, err
-		}
+		r := bytes.NewReader(compTx.Bytes)
+		msgTx := wire.NewMsgTx(1)
+		msgTx.BtcDecode(r, 1, wire.WitnessEncoding)
+		compTxid := msgTx.TxHash()
 		for _, argIn := range arg.Inputs {
 			// iterate through inputs of comp
-			for _, compIn := range compTx.Inputs {
-				if argIn.Txid == compIn.Txid && argIn.Vout == compIn.Vout && comp.Txid != arg.Txid {
+			argInTxid, err := chainhash.NewHashFromStr(argIn.Txid)
+			if err != nil {
+				return nil, err
+			}
+			argInOutPoint := wire.NewOutPoint(argInTxid, uint32(argIn.Vout))
+			for _, compIn := range msgTx.TxIn {
+				if outpointsEqual(*argInOutPoint, compIn.PreviousOutPoint) && compTxid.String() != arg.Txid {
 					// found double spend
-					dubs = append(dubs, comp.Txid)
+					dubs = append(dubs, compTxid.String())
 					break // back to argIn loop
 				}
 			}

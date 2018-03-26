@@ -359,6 +359,19 @@ func (i *InsightClient) Broadcast(tx []byte) (string, error) {
 	return txid.Txid, nil
 }
 
+func (i *InsightClient) EstimateFee(nbBlocks int) (int, error) {
+	resp, err := i.doRequest("utils/estimatefee", http.MethodGet, nil, url.Values{"nbBlocks": {fmt.Sprint(nbBlocks)}})
+	if err != nil {
+		return 0, err
+	}
+	data := map[int]float64{}
+	defer resp.Body.Close()
+	if err = json.NewDecoder(resp.Body).Decode(data); err != nil {
+		return 0, fmt.Errorf("error decoding fee estimate: %s\n", err)
+	}
+	return int(data[nbBlocks] * 1e8), nil
+}
+
 func (i *InsightClient) GetInfo() (*Info, error) {
 	q, err := url.ParseQuery("?q=values")
 	if err != nil {
