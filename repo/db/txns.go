@@ -44,13 +44,13 @@ func (t *TxnsDB) Put(raw []byte, txid string, value, height int, timestamp time.
 	return nil
 }
 
-func (t *TxnsDB) Get(txid chainhash.Hash) ([]byte, wallet.Txn, error) {
+func (t *TxnsDB) Get(txid chainhash.Hash) (wallet.Txn, error) {
 	t.lock.Lock()
 	defer t.lock.Unlock()
 	var txn wallet.Txn
 	stmt, err := t.db.Prepare("select tx, value, height, timestamp, watchOnly from txns where txid=?")
 	if err != nil {
-		return nil, txn, err
+		return txn, err
 	}
 	defer stmt.Close()
 	var raw []byte
@@ -60,7 +60,7 @@ func (t *TxnsDB) Get(txid chainhash.Hash) ([]byte, wallet.Txn, error) {
 	var watchOnlyInt int
 	err = stmt.QueryRow(txid.String()).Scan(&raw, &value, &height, &timestamp, &watchOnlyInt)
 	if err != nil {
-		return nil, txn, err
+		return txn, err
 	}
 	watchOnly := false
 	if watchOnlyInt > 0 {
@@ -72,8 +72,9 @@ func (t *TxnsDB) Get(txid chainhash.Hash) ([]byte, wallet.Txn, error) {
 		Height:    int32(height),
 		Timestamp: time.Unix(int64(timestamp), 0),
 		WatchOnly: watchOnly,
+		Bytes:     raw,
 	}
-	return raw, txn, nil
+	return txn, nil
 }
 
 func (t *TxnsDB) GetAll(includeWatchOnly bool) ([]wallet.Txn, error) {
