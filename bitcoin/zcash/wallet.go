@@ -250,7 +250,8 @@ func (w *Wallet) AddressToScript(addr btc.Address) ([]byte, error) {
 // Returns if the wallet has the key for the given address
 func (w *Wallet) HasKey(addr btc.Address) bool {
 	<-w.initChan
-	panic("not implemented")
+	_, err := w.hdKeyForAddress(addr)
+	return err == nil
 }
 
 // Get the confirmed and unconfirmed balances
