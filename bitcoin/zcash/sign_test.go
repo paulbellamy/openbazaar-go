@@ -11,54 +11,196 @@ import (
 	"github.com/btcsuite/btcd/btcec"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/txscript"
+	btc "github.com/btcsuite/btcutil"
 )
 
 func TestTransactionSign(t *testing.T) {
 	w, _ := NewWallet(testConfig(t))
-	address := w.NewAddress(wallet.EXTERNAL)
-	script, err := w.AddressToScript(address)
-	if err != nil {
-		t.Fatal(err)
+	var addresses []btc.Address
+	var keys []*btcec.PrivateKey
+	for i := 0; i < 3; i++ {
+		address := w.NewAddress(wallet.EXTERNAL)
+		key, err := w.MasterPrivateKey().ECPrivKey()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := w.DB.Keys().ImportKey(address.ScriptAddress(), key); err != nil {
+			t.Fatal(err)
+		}
+		addresses = append(addresses, address)
+		keys = append(keys, key)
 	}
-	key, err := w.MasterPrivateKey().ECPrivKey()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := w.DB.Keys().ImportKey(address.ScriptAddress(), key); err != nil {
-		t.Fatal(err)
-	}
-	txHash, _ := chainhash.NewHashFromStr("a")
-	txn := &Transaction{
-		Version:   1,
-		Timestamp: time.Now(),
-		Inputs: []Input{
-			{
-				Txid: txHash.String(),
-				Vout: 0,
-				N:    0,
-				ScriptSig: Script{
-					Hex: hex.EncodeToString(script),
-				},
-			},
+
+	for _, tc := range []struct {
+		name    string
+		script  func() ([]byte, error)
+		pending bool
+	}{
+		{
+			name:   "pubkey",
+			script: func() ([]byte, error) { return w.AddressToScript(addresses[0]) },
 		},
+		{name: "p2sh", pending: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.pending {
+				t.Fatal("pending")
+			}
+
+			script, err := tc.script()
+			if err != nil {
+				t.Fatal(err)
+			}
+			txHash, _ := chainhash.NewHashFromStr("a")
+			txn := &Transaction{
+				Version:   1,
+				Timestamp: time.Now(),
+				Inputs: []Input{
+					{
+						Txid: txHash.String(),
+						Vout: 0,
+						N:    0,
+						ScriptSig: Script{
+							Hex: hex.EncodeToString(script),
+						},
+					},
+				},
+			}
+			signed, err := w.Sign(txn, SigHashAll, uint32(0))
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			// Check txn inputs are signed with our key
+			if len(txn.Inputs) <= 0 {
+				t.Fatalf("Txn had no inputs")
+			}
+
+			// Check the input signature
+			signingKey, err := w.MasterPrivateKey().ECPubKey()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := verifySignature(txn, signingKey, 0, signed.Inputs[0].ScriptSig.Hex); err != nil {
+				t.Error(err)
+			}
+		})
 	}
-	signed, err := w.Sign(txn, SigHashAll, uint32(0))
-	if err != nil {
-		t.Fatal(err)
+}
+
+func TestTransactionMultisign(t *testing.T) {
+	w, _ := NewWallet(testConfig(t))
+	var addresses []btc.Address
+	var keys []*btcec.PrivateKey
+	for i := 0; i < 3; i++ {
+		address := w.NewAddress(wallet.EXTERNAL)
+		key, err := w.MasterPrivateKey().ECPrivKey()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := w.DB.Keys().ImportKey(address.ScriptAddress(), key); err != nil {
+			t.Fatal(err)
+		}
+		addresses = append(addresses, address)
+		keys = append(keys, key)
 	}
 
-	// Check txn inputs are signed with our key
-	if len(txn.Inputs) <= 0 {
-		t.Fatalf("Txn had no inputs")
-	}
+	for _, tc := range []struct {
+		name    string
+		script  func() ([]byte, error)
+		pending bool
+	}{
+		{
+			name: "multisig 2 of 2",
+			script: txscript.NewScriptBuilder().
+				AddInt64(2).
+				AddData(keys[0].PubKey().SerializeCompressed()).
+				AddData(keys[1].PubKey().SerializeCompressed()).
+				AddInt64(2).
+				AddOp(txscript.OP_CHECKMULTISIG).
+				Script,
+		},
+		{
+			name: "multisig 1 of 2",
+			script: txscript.NewScriptBuilder().
+				AddInt64(1).
+				AddData(keys[0].PubKey().SerializeCompressed()).
+				AddData(keys[1].PubKey().SerializeCompressed()).
+				AddInt64(2).
+				AddOp(txscript.OP_CHECKMULTISIG).
+				Script,
+		},
+		{
+			name: "multisig 2 of 3",
+			script: txscript.NewScriptBuilder().
+				AddInt64(2).
+				AddData(keys[0].PubKey().SerializeCompressed()).
+				AddData(keys[1].PubKey().SerializeCompressed()).
+				AddData(keys[2].PubKey().SerializeCompressed()).
+				AddInt64(3).
+				AddOp(txscript.OP_CHECKMULTISIG).
+				Script,
+		},
+		{name: "multisig timeout", pending: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.pending {
+				t.Fatal("pending")
+			}
 
-	// Check the input signature
-	signingKey, err := w.MasterPrivateKey().ECPubKey()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := verifySignature(txn, signingKey, 0, signed.Inputs[0].ScriptSig.Hex); err != nil {
-		t.Error(err)
+			script, err := tc.script()
+			if err != nil {
+				t.Fatal(err)
+			}
+			txHash, _ := chainhash.NewHashFromStr("a")
+			inputs := []wallet.TransactionInput{
+				{
+					OutpointHash:       txHash[:],
+					OutpointIndex:      0,
+					LinkedScriptPubKey: script,
+					Value:              1234,
+				},
+			}
+			outputs := []wallet.TransactionOutput{}
+			redeemScript := []byte(nil) // TODO: Do we need this?
+			feePerByte := uint64(0)
+			sigs, err := w.CreateMultisigSignature(inputs, outputs, w.MasterPrivateKey(), redeemScript, feePerByte)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// TODO: Do sigs1 and sigs2 need to be different?
+			signedBytes, err := w.Multisign(inputs, outputs, sigs, sigs, redeemScript, feePerByte, true)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			var signed Transaction
+			if err := signed.UnmarshalBinary(signedBytes); err != nil {
+				t.Fatal(err)
+			}
+
+			// Check the input signature
+			txn := &Transaction{
+				Version:   1,
+				Timestamp: time.Now(),
+				Inputs: []Input{
+					{
+						Txid: txHash.String(),
+						Vout: 0,
+						ScriptSig: Script{
+							Hex: hex.EncodeToString(script),
+						},
+					},
+				},
+			}
+			signingKey, err := w.MasterPrivateKey().ECPubKey()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := verifySignature(txn, signingKey, 0, signed.Inputs[0].ScriptSig.Hex); err != nil {
+				t.Error(err)
+			}
+		})
 	}
 }
 
