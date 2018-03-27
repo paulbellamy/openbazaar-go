@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/OpenBazaar/multiwallet/client"
@@ -30,14 +31,15 @@ var log = logging.MustGetLogger("zcash")
 
 type Wallet struct {
 	Config
-	keyManager       *keys.KeyManager
-	masterPrivateKey *hd.ExtendedKey
-	masterPublicKey  *hd.ExtendedKey
-	listeners        []func(wallet.TransactionCallback)
-	insight          InsightClient
-	txStore          *TxStore
-	initChan         chan struct{}
-	stopChan         chan struct{}
+	keyManager             *keys.KeyManager
+	masterPrivateKey       *hd.ExtendedKey
+	masterPublicKey        *hd.ExtendedKey
+	listeners              []func(wallet.TransactionCallback)
+	insight                InsightClient
+	txStore                *TxStore
+	initChan               chan struct{}
+	addrSubscriptions      map[btc.Address]struct{}
+	addrSubscriptionsMutex sync.Mutex
 }
 
 type Config struct {
@@ -61,6 +63,7 @@ type InsightClient interface {
 	TransactionNotify() <-chan client.Transaction
 	Broadcast(tx []byte) (string, error)
 	EstimateFee(nbBlocks int) (int, error)
+	ListenAddress(addr btc.Address)
 	Close()
 }
 
@@ -82,14 +85,14 @@ func NewWallet(config Config) (*Wallet, error) {
 	}
 
 	w := &Wallet{
-		Config:           config,
-		keyManager:       keyManager,
-		masterPrivateKey: mPrivKey,
-		masterPublicKey:  mPubKey,
-		insight:          insight,
-		txStore:          txStore,
-		initChan:         make(chan struct{}),
-		stopChan:         make(chan struct{}),
+		Config:            config,
+		keyManager:        keyManager,
+		masterPrivateKey:  mPrivKey,
+		masterPublicKey:   mPubKey,
+		insight:           insight,
+		txStore:           txStore,
+		initChan:          make(chan struct{}),
+		addrSubscriptions: make(map[btc.Address]struct{}),
 	}
 
 	return w, nil
@@ -111,6 +114,7 @@ func (w *Wallet) MainNetworkEnabled() bool {
 }
 
 func (w *Wallet) Start() {
+	w.subscribeToAllAddresses()
 	w.loadInitialTransactions()
 	go w.watchTransactions()
 	close(w.initChan)
@@ -161,6 +165,21 @@ func (w *Wallet) onTxn(txn client.Transaction) error {
 	}
 	_, err = w.txStore.Ingest(msgTx, raw, int32(txn.BlockHeight))
 	return err
+}
+
+func (w *Wallet) subscribeToAllAddresses() {
+	keys := w.keyManager.GetKeys()
+	for _, k := range keys {
+		if addr, err := k.Address(w.Params()); err == nil {
+			w.addWatchedAddr(addr)
+		}
+	}
+	scripts, _ := w.DB.WatchedScripts().GetAll()
+	for _, script := range scripts {
+		if addr, err := w.ScriptToAddress(script); err == nil {
+			w.addWatchedAddr(addr)
+		}
+	}
 }
 
 func (w *Wallet) loadInitialTransactions() {
@@ -873,9 +892,21 @@ func (w *Wallet) GenerateMultisigScript(keys []hd.ExtendedKey, threshold int, ti
 
 // Add a script to the wallet and get notifications back when coins are received or spent from it
 func (w *Wallet) AddWatchedScript(script []byte) error {
+	if addr, err := w.ScriptToAddress(script); err == nil {
+		w.addWatchedAddr(addr)
+	}
 	err := w.DB.WatchedScripts().Put(script)
 	w.txStore.PopulateAdrs()
 	return err
+}
+
+func (w *Wallet) addWatchedAddr(addr btc.Address) {
+	w.addrSubscriptionsMutex.Lock()
+	if _, ok := w.addrSubscriptions[addr]; !ok {
+		w.addrSubscriptions[addr] = struct{}{}
+		w.insight.ListenAddress(addr)
+	}
+	w.addrSubscriptionsMutex.Unlock()
 }
 
 // Add a callback for incoming transactions
