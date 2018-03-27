@@ -2,221 +2,241 @@ package zcash
 
 import (
 	"bytes"
-	"encoding/hex"
-	"fmt"
+	"errors"
+	"sync"
 	"time"
 
-	"github.com/OpenBazaar/multiwallet/client"
 	"github.com/OpenBazaar/multiwallet/keys"
-	wallet "github.com/OpenBazaar/wallet-interface"
+	"github.com/OpenBazaar/wallet-interface"
+	"github.com/btcsuite/btcd/blockchain"
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
+	"github.com/btcsuite/btcd/txscript"
 	"github.com/btcsuite/btcd/wire"
+	"github.com/btcsuite/btcutil"
 )
 
-// TODO: Move this all to multiwallet
-type TxStore interface {
-	Ingest(txn client.Transaction, raw []byte) error
+type TxStore struct {
+	params         *chaincfg.Params
+	db             wallet.Datastore
+	keyManager     *keys.KeyManager
+	adrs           []btcutil.Address
+	watchedScripts [][]byte
+	txids          map[string]int32
+	addrMutex      *sync.Mutex
+	cbMutex        *sync.Mutex
+	listeners      []func(wallet.TransactionCallback)
 }
 
-type txStore struct {
-	params     *chaincfg.Params
-	db         wallet.Datastore
-	keyManager *keys.KeyManager
-}
-
-func NewTxStore(params *chaincfg.Params, db wallet.Datastore, km *keys.KeyManager) (TxStore, error) {
-	return &txStore{
-		params:     params,
+func NewTxStore(p *chaincfg.Params, db wallet.Datastore, km *keys.KeyManager) (*TxStore, error) {
+	txs := &TxStore{
+		params:     p,
 		db:         db,
 		keyManager: km,
-	}, nil
+		txids:      make(map[string]int32),
+		addrMutex:  new(sync.Mutex),
+		cbMutex:    new(sync.Mutex),
+	}
+	err := txs.PopulateAdrs()
+	if err != nil {
+		return nil, err
+	}
+	return txs, nil
 }
 
-// TODO: Check if we've already processed this txn, and update height accordingly
-func (t *txStore) Ingest(txn client.Transaction, raw []byte) error {
-	if err := validTxn(txn); err != nil {
-		return err
-	}
-
-	hash, err := chainhash.NewHashFromStr(txn.Txid)
+// Ingest puts a tx into the DB atomically.  This can result in a
+// gain, a loss, or no result.  Gain or loss in satoshis is returned.
+func (ts *TxStore) Ingest(tx *wire.MsgTx, raw []byte, height int32) (uint32, error) {
+	var hits uint32
+	var err error
+	// Tx has been OK'd by SPV; check tx sanity
+	utilTx := btcutil.NewTx(tx) // convert for validation
+	// Checks basic stuff like there are inputs and ouputs
+	err = blockchain.CheckTransactionSanity(utilTx)
 	if err != nil {
-		return err
+		return hits, err
 	}
 
-	if existing, err := t.db.Txns().Get(*hash); err == nil && (existing.Height > 0 || (existing.Height == 0 && txn.BlockHeight == 0)) {
-		// We've already processed this txn
-		return nil
+	// Check to see if we've already processed this tx. If so, return.
+	sh, ok := ts.txids[tx.TxHash().String()]
+	if ok && (sh > 0 || (sh == 0 && height == 0)) {
+		return 1, nil
 	}
 
 	// Check to see if this is a double spend
-	doubleSpends, err := t.CheckDoubleSpends(txn)
+	doubleSpends, err := ts.CheckDoubleSpends(tx)
 	if err != nil {
-		return err
+		return hits, err
 	}
 	if len(doubleSpends) > 0 {
 		// First seen rule
-		if txn.BlockHeight == 0 {
-			return nil
+		if height == 0 {
+			return 0, nil
 		} else {
 			// Mark any unconfirmed doubles as dead
 			for _, double := range doubleSpends {
-				t.markAsDead(double)
+				ts.markAsDead(*double)
 			}
 		}
 	}
 
-	// Update utxos, and calculate value
-	value, isRelevant, watchOnly := t.storeUtxos(txn, hash)
-
-	// Update stxos, and calculate value
-	value2, isRelevant2, watchOnly2, err := t.storeStxos(txn, hash)
-	if err != nil {
-		log.Errorf("unable to store stxos for %v: %v", txn.Txid, err)
+	// Generate PKscripts for all addresses
+	ts.addrMutex.Lock()
+	PKscripts := make([][]byte, len(ts.adrs))
+	for i := range ts.adrs {
+		// Iterate through all our addresses
+		// TODO: This will need to test both segwit and legacy once segwit activates
+		PKscripts[i], err = txscript.PayToAddrScript(ts.adrs[i])
+		if err != nil {
+			return hits, err
+		}
 	}
-	value += value2
-	isRelevant = isRelevant || isRelevant2
-	watchOnly = watchOnly || watchOnly2
-	if !isRelevant {
-		return nil
-	}
+	ts.addrMutex.Unlock()
 
-	// Store the transaction
-	return t.db.Txns().Put(raw, hash.String(), value, txn.BlockHeight, time.Unix(txn.Time, 0), watchOnly)
-}
-
-// validTxn validates a transaction based on rules from zcash protocol spec,
-// section 6.1
-// TODO: Check outputs/inputs
-func validTxn(txn client.Transaction) error {
-	if txn.Version < 1 {
-		return fmt.Errorf("transaction version must be greater than or equal to 1")
-	}
-
-	if len(txn.Inputs) == 0 {
-		// this is not always true (see joinSplits)
-		return fmt.Errorf("transaction has no inputs")
-	}
-	return nil
-}
-
-func (t *txStore) storeUtxos(txn client.Transaction, hash *chainhash.Hash) (value int, isRelevant, watchOnly bool) {
-	addrs, _ := keysToAddresses(t.params, t.keyManager.GetKeys())
-	for _, output := range txn.Outputs {
-		for _, addr := range addrs {
-			encodedAddr := addr.EncodeAddress()
-			matched := false
-			for _, a := range output.ScriptPubKey.Addresses {
-				if encodedAddr == a {
-					matched = true
-					break
+	// Iterate through all outputs of this tx, see if we gain
+	cachedSha := tx.TxHash()
+	cb := wallet.TransactionCallback{Txid: cachedSha.CloneBytes(), Height: height}
+	value := int64(0)
+	matchesWatchOnly := false
+	for i, txout := range tx.TxOut {
+		out := wallet.TransactionOutput{ScriptPubKey: txout.PkScript, Value: txout.Value, Index: uint32(i)}
+		for _, script := range PKscripts {
+			if bytes.Equal(txout.PkScript, script) { // new utxo found
+				scriptAddress, _ := ts.extractScriptAddress(txout.PkScript)
+				ts.keyManager.MarkKeyAsUsed(scriptAddress)
+				newop := wire.OutPoint{
+					Hash:  cachedSha,
+					Index: uint32(i),
 				}
+				newu := wallet.Utxo{
+					AtHeight:     height,
+					Value:        txout.Value,
+					ScriptPubkey: txout.PkScript,
+					Op:           newop,
+					WatchOnly:    false,
+				}
+				value += newu.Value
+				ts.db.Utxos().Put(newu)
+				hits++
+				break
 			}
-			if !matched {
-				continue
-			}
-
-			if err := t.keyManager.MarkKeyAsUsed(addr.ScriptAddress()); err != nil {
-				log.Errorf("could not mark key as used %v: %v", addr, err)
-			}
-
-			scriptBytes, err := hex.DecodeString(output.ScriptPubKey.Hex)
-			if err != nil {
-				log.Errorf("could not decode utxo for %v: %v", addr, err)
-				continue
-			}
-
-			// Save the new utxo
-			utxo := wallet.Utxo{
-				Op:           wire.OutPoint{Hash: *hash, Index: uint32(output.N)},
-				AtHeight:     int32(txn.BlockHeight),
-				Value:        int64(output.Value * 1e8), // TODO: Eugh. Floats :(
-				ScriptPubkey: scriptBytes,
-				WatchOnly:    false,
-			}
-			if err := t.db.Utxos().Put(utxo); err != nil {
-				log.Errorf("could save utxo for %v: %v", addr, err)
-			}
-
-			value += int(utxo.Value)
-			isRelevant = true
 		}
-
-		// TODO: Check watched scripts here
+		// Now check watched scripts
+		for _, script := range ts.watchedScripts {
+			if bytes.Equal(txout.PkScript, script) {
+				newop := wire.OutPoint{
+					Hash:  cachedSha,
+					Index: uint32(i),
+				}
+				newu := wallet.Utxo{
+					AtHeight:     height,
+					Value:        txout.Value,
+					ScriptPubkey: txout.PkScript,
+					Op:           newop,
+					WatchOnly:    true,
+				}
+				ts.db.Utxos().Put(newu)
+				matchesWatchOnly = true
+			}
+		}
+		cb.Outputs = append(cb.Outputs, out)
 	}
-	return value, isRelevant, watchOnly
-}
-
-func (t *txStore) storeStxos(txn client.Transaction, hash *chainhash.Hash) (value int, isRelevant, watchOnly bool, err error) {
-	utxos, err := t.db.Utxos().GetAll()
+	utxos, err := ts.db.Utxos().GetAll()
 	if err != nil {
-		return 0, false, false, err
+		return 0, err
 	}
+	for _, txin := range tx.TxIn {
+		for i, u := range utxos {
+			if outPointsEqual(txin.PreviousOutPoint, u.Op) {
+				st := wallet.Stxo{
+					Utxo:        u,
+					SpendHeight: height,
+					SpendTxid:   cachedSha,
+				}
+				ts.db.Stxos().Put(st)
+				ts.db.Utxos().Delete(u)
+				utxos = append(utxos[:i], utxos[i+1:]...)
+				if !u.WatchOnly {
+					value -= u.Value
+					hits++
+				} else {
+					matchesWatchOnly = true
+				}
 
-	stxos, err := t.db.Stxos().GetAll()
-	if err != nil {
-		return 0, false, false, err
-	}
-
-	for _, input := range txn.Inputs {
-		// Have we already seen this stxo?
-		if stxo, ok := hasMatchingStxo(stxos, hash); ok {
-			// Update the existing stxo
-			stxo.SpendHeight = int32(txn.BlockHeight)
-			err = t.db.Stxos().Put(stxo)
-			if err != nil {
-				log.Errorf("could save stxo: %v", err)
+				in := wallet.TransactionInput{
+					OutpointHash:       u.Op.Hash.CloneBytes(),
+					OutpointIndex:      u.Op.Index,
+					LinkedScriptPubKey: u.ScriptPubkey,
+					Value:              u.Value,
+				}
+				cb.Inputs = append(cb.Inputs, in)
+				break
 			}
-			isRelevant = true
-			watchOnly = watchOnly || stxo.Utxo.WatchOnly
-			continue
-		}
-
-		// Does it match a utxo?
-		for i, utxo := range utxos {
-			if input.Txid != utxo.Op.Hash.String() || uint32(input.Vout) != utxo.Op.Index {
-				continue
-			}
-			err = t.db.Stxos().Put(wallet.Stxo{
-				Utxo:        utxo,
-				SpendHeight: int32(txn.BlockHeight),
-				SpendTxid:   *hash,
-			})
-			if err != nil {
-				log.Errorf("could save stxo: %v", err)
-			}
-			err = t.db.Utxos().Delete(utxo)
-			if err != nil {
-				log.Errorf("could delete utxo: %v", err)
-			}
-			// We're done with this utxo, no need to check it again.
-			utxos = append(utxos[:i], utxos[i+1:]...)
-			if !utxo.WatchOnly {
-				value -= int(utxo.Value)
-			}
-			isRelevant = true
-			watchOnly = watchOnly || utxo.WatchOnly
-			break
 		}
 	}
-	return value, isRelevant, watchOnly, nil
-}
 
-func hasMatchingStxo(stxos []wallet.Stxo, hash *chainhash.Hash) (wallet.Stxo, bool) {
-	for _, stxo := range stxos {
-		if stxo.SpendTxid.IsEqual(hash) {
-			return stxo, true
+	// Update height of any stxos
+	if height > 0 {
+		stxos, err := ts.db.Stxos().GetAll()
+		if err != nil {
+			return 0, err
+		}
+		for _, stxo := range stxos {
+			if stxo.SpendTxid.IsEqual(&cachedSha) {
+				stxo.SpendHeight = height
+				ts.db.Stxos().Put(stxo)
+				if !stxo.Utxo.WatchOnly {
+					hits++
+				} else {
+					matchesWatchOnly = true
+				}
+				break
+			}
 		}
 	}
-	return wallet.Stxo{}, false
+
+	// If hits is nonzero it's a relevant tx and we should store it
+	if hits > 0 || matchesWatchOnly {
+		ts.cbMutex.Lock()
+		txn, err := ts.db.Txns().Get(tx.TxHash())
+		shouldCallback := false
+		if err != nil {
+			cb.Value = value
+			txn.Timestamp = time.Now()
+			shouldCallback = true
+			ts.db.Txns().Put(raw, tx.TxHash().String(), int(value), int(height), txn.Timestamp, hits == 0)
+			ts.txids[tx.TxHash().String()] = height
+		}
+		// Let's check the height before committing so we don't allow rogue peers to send us a lose
+		// tx that resets our height to zero.
+		if txn.Height <= 0 {
+			ts.db.Txns().UpdateHeight(tx.TxHash(), int(height))
+			ts.txids[tx.TxHash().String()] = height
+			if height > 0 {
+				cb.Value = txn.Value
+				shouldCallback = true
+			}
+		}
+		if shouldCallback {
+			// Callback on listeners
+			for _, listener := range ts.listeners {
+				listener(cb)
+			}
+		}
+		ts.cbMutex.Unlock()
+		ts.PopulateAdrs()
+		hits++
+	}
+	return hits, err
 }
 
 // GetDoubleSpends takes a transaction and compares it with
 // all transactions in the db.  It returns a slice of all txids in the db
 // which are double spent by the received tx.
-func (t *txStore) CheckDoubleSpends(arg client.Transaction) ([]string, error) {
-	var dubs []string // slice of all double-spent txs
-	txs, err := t.db.Txns().GetAll(true)
+func (ts *TxStore) CheckDoubleSpends(argTx *wire.MsgTx) ([]*chainhash.Hash, error) {
+	var dubs []*chainhash.Hash // slice of all double-spent txs
+	argTxid := argTx.TxHash()
+	txs, err := ts.db.Txns().GetAll(true)
 	if err != nil {
 		return dubs, err
 	}
@@ -228,17 +248,12 @@ func (t *txStore) CheckDoubleSpends(arg client.Transaction) ([]string, error) {
 		msgTx := wire.NewMsgTx(1)
 		msgTx.BtcDecode(r, 1, wire.WitnessEncoding)
 		compTxid := msgTx.TxHash()
-		for _, argIn := range arg.Inputs {
-			// iterate through inputs of comp
-			argInTxid, err := chainhash.NewHashFromStr(argIn.Txid)
-			if err != nil {
-				return nil, err
-			}
-			argInOutPoint := wire.NewOutPoint(argInTxid, uint32(argIn.Vout))
+		for _, argIn := range argTx.TxIn {
+			// iterate through inputs of compTx
 			for _, compIn := range msgTx.TxIn {
-				if outpointsEqual(*argInOutPoint, compIn.PreviousOutPoint) && compTxid.String() != arg.Txid {
+				if outPointsEqual(argIn.PreviousOutPoint, compIn.PreviousOutPoint) && !compTxid.IsEqual(&argTxid) {
 					// found double spend
-					dubs = append(dubs, compTxid.String())
+					dubs = append(dubs, &compTxid)
 					break // back to argIn loop
 				}
 			}
@@ -247,17 +262,38 @@ func (t *txStore) CheckDoubleSpends(arg client.Transaction) ([]string, error) {
 	return dubs, nil
 }
 
-func (t *txStore) markAsDead(txid string) error {
-	stxos, err := t.db.Stxos().GetAll()
+// PopulateAdrs just puts a bunch of adrs in ram; it doesn't touch the DB
+func (ts *TxStore) PopulateAdrs() error {
+	keys := ts.keyManager.GetKeys()
+	ts.addrMutex.Lock()
+	ts.adrs = []btcutil.Address{}
+	for _, k := range keys {
+		addr, err := k.Address(ts.params)
+		if err != nil {
+			continue
+		}
+		ts.adrs = append(ts.adrs, addr)
+	}
+	ts.watchedScripts, _ = ts.db.WatchedScripts().GetAll()
+	txns, _ := ts.db.Txns().GetAll(true)
+	for _, t := range txns {
+		ts.txids[t.Txid] = t.Height
+	}
+	ts.addrMutex.Unlock()
+	return nil
+}
+
+func (ts *TxStore) markAsDead(txid chainhash.Hash) error {
+	stxos, err := ts.db.Stxos().GetAll()
 	if err != nil {
 		return err
 	}
 	markStxoAsDead := func(s wallet.Stxo) error {
-		err := t.db.Stxos().Delete(s)
+		err := ts.db.Stxos().Delete(s)
 		if err != nil {
 			return err
 		}
-		err = t.db.Txns().UpdateHeight(s.SpendTxid, -1)
+		err = ts.db.Txns().UpdateHeight(s.SpendTxid, -1)
 		if err != nil {
 			return err
 		}
@@ -265,42 +301,77 @@ func (t *txStore) markAsDead(txid string) error {
 	}
 	for _, s := range stxos {
 		// If an stxo is marked dead, move it back into the utxo table
-		if txid == s.SpendTxid.String() {
+		if txid.IsEqual(&s.SpendTxid) {
 			if err := markStxoAsDead(s); err != nil {
 				return err
 			}
-			if err := t.db.Utxos().Put(s.Utxo); err != nil {
+			if err := ts.db.Utxos().Put(s.Utxo); err != nil {
 				return err
 			}
 		}
 		// If a dependency of the spend is dead then mark the spend as dead
-		if txid == s.Utxo.Op.Hash.String() {
+		if txid.IsEqual(&s.Utxo.Op.Hash) {
 			if err := markStxoAsDead(s); err != nil {
 				return err
 			}
-			if err := t.markAsDead(s.SpendTxid.String()); err != nil {
+			if err := ts.markAsDead(s.SpendTxid); err != nil {
 				return err
 			}
 		}
 	}
-	utxos, err := t.db.Utxos().GetAll()
+	utxos, err := ts.db.Utxos().GetAll()
 	if err != nil {
 		return err
 	}
 	// Dead utxos should just be deleted
 	for _, u := range utxos {
-		if txid == u.Op.Hash.String() {
-			err := t.db.Utxos().Delete(u)
+		if txid.IsEqual(&u.Op.Hash) {
+			err := ts.db.Utxos().Delete(u)
 			if err != nil {
 				return err
 			}
 		}
 	}
+	ts.db.Txns().UpdateHeight(txid, -1)
+	return nil
+}
 
-	txidHash, err := chainhash.NewHashFromStr(txid)
+func (ts *TxStore) processReorg(lastGoodHeight uint32) error {
+	txns, err := ts.db.Txns().GetAll(true)
 	if err != nil {
 		return err
 	}
-	t.db.Txns().UpdateHeight(*txidHash, -1)
+	for i := len(txns) - 1; i >= 0; i-- {
+		if txns[i].Height > int32(lastGoodHeight) {
+			txid, err := chainhash.NewHashFromStr(txns[i].Txid)
+			if err != nil {
+				log.Error(err)
+				continue
+			}
+			err = ts.markAsDead(*txid)
+			if err != nil {
+				log.Error(err)
+				continue
+			}
+		}
+	}
 	return nil
+}
+
+func (ts *TxStore) extractScriptAddress(script []byte) ([]byte, error) {
+	_, addrs, _, err := txscript.ExtractPkScriptAddrs(script, ts.params)
+	if err != nil {
+		return nil, err
+	}
+	if len(addrs) == 0 {
+		return nil, errors.New("unknown script")
+	}
+	return addrs[0].ScriptAddress(), nil
+}
+
+func outPointsEqual(a, b wire.OutPoint) bool {
+	if !a.Hash.IsEqual(&b.Hash) {
+		return false
+	}
+	return a.Index == b.Index
 }

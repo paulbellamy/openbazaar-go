@@ -35,8 +35,7 @@ type Wallet struct {
 	masterPublicKey  *hd.ExtendedKey
 	listeners        []func(wallet.TransactionCallback)
 	insight          InsightClient
-	txStore          TxStore
-	addrsToWatch     []btc.Address
+	txStore          *TxStore
 	initChan         chan struct{}
 	stopChan         chan struct{}
 }
@@ -110,16 +109,9 @@ func (w *Wallet) MainNetworkEnabled() bool {
 	return w.Params().Name == chaincfg.MainNetParams.Name
 }
 
-func (w *Wallet) addQueuedWatchAddresses() {
-	for _, addr := range w.addrsToWatch {
-		w.addWatchedScript(addr)
-	}
-}
-
 func (w *Wallet) Start() {
 	w.loadInitialTransactions()
 	go w.watchTransactions()
-	go w.addQueuedWatchAddresses()
 	close(w.initChan)
 }
 
@@ -128,7 +120,46 @@ func (w *Wallet) onTxn(txn client.Transaction) error {
 	if err != nil {
 		return err
 	}
-	return w.txStore.Ingest(txn, raw)
+	msgTx := &wire.MsgTx{
+		Version:  int32(txn.Version),
+		TxIn:     make([]*wire.TxIn, len(txn.Inputs)),
+		TxOut:    make([]*wire.TxOut, len(txn.Outputs)),
+		LockTime: uint32(txn.Time),
+	}
+	for i, input := range txn.Inputs {
+		hash, err := chainhash.NewHashFromStr(input.Txid)
+		if err != nil {
+			return err
+		}
+		sigScript, err := hex.DecodeString(input.ScriptSig.Hex)
+		if err != nil {
+			return err
+		}
+		msgTx.TxIn[i] = &wire.TxIn{
+			PreviousOutPoint: wire.OutPoint{
+				Hash:  *hash,
+				Index: uint32(input.Vout),
+			},
+			SignatureScript: sigScript,
+			Sequence:        uint32(input.Sequence), // TODO: Is this sequence right?
+		}
+	}
+	for i, output := range txn.Outputs {
+		value, err := output.ValueSat()
+		if err != nil {
+			return err
+		}
+		pkScript, err := hex.DecodeString(output.ScriptPubKey.Hex)
+		if err != nil {
+			return err
+		}
+		msgTx.TxOut[i] = &wire.TxOut{
+			Value:    value,
+			PkScript: pkScript,
+		}
+	}
+	_, err = w.txStore.Ingest(msgTx, raw, int32(txn.BlockHeight))
+	return err
 }
 
 func (w *Wallet) loadInitialTransactions() {
@@ -198,7 +229,6 @@ func (w *Wallet) MasterPublicKey() *hd.ExtendedKey {
 
 // Get the current address for the given purpose
 // TODO: Handle these errors
-// TODO: Use multiwallet for this
 func (w *Wallet) CurrentAddress(purpose wallet.KeyPurpose) btc.Address {
 	key, _ := w.keyManager.GetCurrentKey(purpose)
 	addr, _ := keyToAddress(key, w.Params())
@@ -844,22 +874,9 @@ func (w *Wallet) GenerateMultisigScript(keys []hd.ExtendedKey, threshold int, ti
 
 // Add a script to the wallet and get notifications back when coins are received or spent from it
 func (w *Wallet) AddWatchedScript(script []byte) error {
-	addr, err := ExtractPkScriptAddrs(script, w.Params())
-	if err != nil {
-		return err
-	}
-
-	select {
-	case <-w.initChan:
-		return w.addWatchedScript(addr)
-	default:
-		w.addrsToWatch = append(w.addrsToWatch, addr)
-	}
-	return nil
-}
-
-func (w *Wallet) addWatchedScript(addr btc.Address) error {
-	panic("not implemented")
+	err := w.DB.WatchedScripts().Put(script)
+	w.txStore.PopulateAdrs()
+	return err
 }
 
 // Add a callback for incoming transactions

@@ -1,5 +1,11 @@
 package client
 
+import (
+	"fmt"
+	"strconv"
+	"strings"
+)
+
 type Status struct {
 	Info Info `json:"info"`
 }
@@ -111,12 +117,46 @@ type Input struct {
 
 type Output struct {
 	ValueIface   interface{} `json:"value"`
+	Satoshis     *int64      `json:"valueSat"`
 	Value        float64
 	N            int       `json:"n"`
 	ScriptPubKey OutScript `json:"scriptPubKey"`
 	SpentTxid    string    `json:"spentTxId"`
 	SpentIndex   int       `json:"spentIndex"`
 	SpentHeight  int       `json:"spentHeight"`
+}
+
+func (o Output) ValueSat() (int64, error) {
+	if o.Satoshis != nil {
+		return *o.Satoshis, nil
+	}
+	i := o.ValueIface
+	switch v := i.(type) {
+	case float64:
+		return int64(v * 1e8), nil
+	case string:
+		parts := strings.SplitN(v, ".", 2)
+		if len(parts) < 2 {
+			return strconv.ParseInt(v, 10, 64)
+		}
+		integerDigits, err := strconv.ParseInt(parts[0], 10, 64)
+		if err != nil {
+			return 0, fmt.Errorf("error parsing value float: %s\n", err)
+		}
+		fractionalDigits, err := strconv.ParseInt(parts[1][:8], 10, 64)
+		if err != nil {
+			return 0, fmt.Errorf("error parsing value float: %s\n", err)
+		}
+		for j := 8 - len(parts[1]); j > 0; j-- {
+			// Account for dropped trailing zeroes in the fractional portion
+			fractionalDigits *= 10
+		}
+		return (integerDigits * 1e8) + fractionalDigits, nil
+	case int64:
+		return v, nil
+	default:
+		return 0, fmt.Errorf("Unknown value type in response")
+	}
 }
 
 type Script struct {
