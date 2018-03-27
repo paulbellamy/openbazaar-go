@@ -61,6 +61,7 @@ type InsightClient interface {
 	TransactionNotify() <-chan client.Transaction
 	Broadcast(tx []byte) (string, error)
 	EstimateFee(nbBlocks int) (int, error)
+	Close()
 }
 
 func NewWallet(config Config) (*Wallet, error) {
@@ -184,8 +185,6 @@ func (w *Wallet) loadInitialTransactions() {
 func (w *Wallet) watchTransactions() {
 	for {
 		select {
-		case <-w.stopChan:
-			return
 		case txn, ok := <-w.insight.TransactionNotify():
 			if !ok {
 				return
@@ -943,5 +942,5 @@ func (w *Wallet) GetConfirmations(txid chainhash.Hash) (confirms, atHeight uint3
 
 // Cleanly disconnect from the wallet
 func (w *Wallet) Close() {
-	close(w.stopChan)
+	w.insight.Close()
 }

@@ -418,3 +418,9 @@ func toFloat(i interface{}) (float64, error) {
 		return 0, errors.New("Unknown value type in response")
 	}
 }
+
+func (i *InsightClient) Close() {
+	i.socketClient.Close()
+	close(i.blockNotifyChan)
+	close(i.txNotifyChan)
+}
