@@ -51,7 +51,12 @@ func (f *FakeDatastore) Keys() wallet.Keys {
 	return f.keys
 }
 
-func (f *FakeDatastore) WatchedScripts() wallet.WatchedScripts { panic("not implemented") }
+func (f *FakeDatastore) WatchedScripts() wallet.WatchedScripts {
+	if f.watchedScripts == nil {
+		f.watchedScripts = &FakeWatchedScripts{}
+	}
+	return f.watchedScripts
+}
 
 type keyStoreEntry struct {
 	scriptAddress []byte
@@ -342,12 +347,48 @@ func (f *FakeTxns) Delete(txid *chainhash.Hash) error {
 	return nil
 }
 
+type FakeWatchedScripts struct {
+	sync.Once
+	sync.Mutex
+	scripts map[string][]byte
+}
+
+func (f *FakeWatchedScripts) init() {
+	if f.scripts == nil {
+		f.scripts = make(map[string][]byte)
+	}
+}
+
+func (f *FakeWatchedScripts) Put(scriptPubKey []byte) error {
+	f.Do(f.init)
+	f.scripts[hex.EncodeToString(scriptPubKey)] = scriptPubKey
+	return nil
+}
+
+func (f *FakeWatchedScripts) GetAll() ([][]byte, error) {
+	f.Do(f.init)
+	var found [][]byte
+	for _, s := range f.scripts {
+		found = append(found, s)
+	}
+	return found, nil
+}
+
+func (f *FakeWatchedScripts) Delete(scriptPubKey []byte) error {
+	f.Do(f.init)
+	delete(f.scripts, hex.EncodeToString(scriptPubKey))
+	return nil
+}
+
 type FakeInsightClient struct {
 	getLatestBlock    func() (*client.Block, error)
 	getTransactions   func(addrs []btcutil.Address) ([]client.Transaction, error)
 	getRawTransaction func(txid string) ([]byte, error)
 	transactionNotify func() <-chan client.Transaction
 	broadcast         func(tx []byte) (string, error)
+	estimateFee       func(nbBlocks int) (int, error)
+	listenAddress     func(addr btcutil.Address)
+	close             func()
 }
 
 func (f *FakeInsightClient) GetLatestBlock() (*client.Block, error) {
@@ -383,4 +424,23 @@ func (f *FakeInsightClient) Broadcast(tx []byte) (string, error) {
 		panic("not implemented")
 	}
 	return f.broadcast(tx)
+}
+
+func (f *FakeInsightClient) ListenAddress(addr btcutil.Address) {
+	if f.listenAddress != nil {
+		f.listenAddress(addr)
+	}
+}
+
+func (f *FakeInsightClient) EstimateFee(nbBlocks int) (int, error) {
+	if f.estimateFee == nil {
+		panic("not implemented")
+	}
+	return f.estimateFee(nbBlocks)
+}
+
+func (f *FakeInsightClient) Close() {
+	if f.close != nil {
+		f.close()
+	}
 }

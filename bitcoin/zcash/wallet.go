@@ -170,7 +170,7 @@ func (w *Wallet) onTxn(txn client.Transaction) error {
 func (w *Wallet) subscribeToAllAddresses() {
 	keys := w.keyManager.GetKeys()
 	for _, k := range keys {
-		if addr, err := k.Address(w.Params()); err == nil {
+		if addr, err := keyToAddress(k, w.Params()); err == nil {
 			w.addWatchedAddr(addr)
 		}
 	}
@@ -399,7 +399,11 @@ func (w *Wallet) broadcastWireTx(tx *wire.MsgTx) (*chainhash.Hash, error) {
 }
 
 func (w *Wallet) buildTxn(amount int64, addr btc.Address, feeLevel wallet.FeeLevel) (*wire.MsgTx, error) {
-	script, _ := PayToAddrScript(addr)
+	fmt.Printf("[DEBUG] building txn to %v\n", addr.EncodeAddress())
+	script, err := PayToAddrScript(addr)
+	if err != nil {
+		return nil, err
+	}
 	if txrules.IsDustAmount(btc.Amount(amount), len(script), txrules.DefaultRelayFeePerKb) {
 		return nil, wallet.ErrorDustAmount
 	}
@@ -432,7 +436,8 @@ func (w *Wallet) buildTxn(amount int64, addr btc.Address, feeLevel wallet.FeeLev
 			inputs = append(inputs, in)
 			additionalPrevScripts[*outpoint] = c.PkScript()
 			key := coinMap[c]
-			addr, err := key.Address(w.Params())
+			fmt.Printf("[DEBUG] Looking up key from coinmap: %+v -> %v\n", c, key)
+			addr, err := keyToAddress(key, w.Params())
 			if err != nil {
 				continue
 			}
@@ -441,6 +446,7 @@ func (w *Wallet) buildTxn(amount int64, addr btc.Address, feeLevel wallet.FeeLev
 				continue
 			}
 			wif, _ := btc.NewWIF(privKey, w.Params(), true)
+			fmt.Printf("[DEBUG] Caching key for address: %v -> %v\n", addr.EncodeAddress(), wif)
 			additionalKeysByAddress[addr.EncodeAddress()] = wif
 		}
 		return total, inputs, scripts, nil
@@ -475,14 +481,17 @@ func (w *Wallet) buildTxn(amount int64, addr btc.Address, feeLevel wallet.FeeLev
 	getKey := txscript.KeyClosure(func(addr btc.Address) (*btcec.PrivateKey, bool, error) {
 		addrStr := addr.EncodeAddress()
 		wif := additionalKeysByAddress[addrStr]
+		fmt.Printf("[DEBUG] Looking up key for: %v -> %v\n", addr.EncodeAddress(), wif)
 		return wif.PrivKey, wif.CompressPubKey, nil
 	})
 	getScript := txscript.ScriptClosure(func(
 		addr btc.Address) ([]byte, error) {
 		return []byte{}, nil
 	})
+	fmt.Printf("[DEBUG] TXINPUTS: %+v\n", authoredTx.Tx.TxIn[0])
 	for i, txIn := range authoredTx.Tx.TxIn {
 		prevOutScript := additionalPrevScripts[txIn.PreviousOutPoint]
+		// TODO: We can't use this as it embeds bitcoin-specific script address extraction and encoding
 		script, err := txscript.SignTxOutput(w.Params(),
 			authoredTx.Tx, i, prevOutScript, txscript.SigHashAll, getKey,
 			getScript, txIn.SignatureScript)
@@ -519,6 +528,7 @@ func (w *Wallet) gatherCoins() (map[coinset.Coin]*hd.ExtendedKey, error) {
 		if err != nil {
 			continue
 		}
+		fmt.Printf("[DEBUG] found coin: %+v -> %+v, scriptPubKey: %v\n", addr.EncodeAddress(), hdKey, u.ScriptPubkey)
 		m[c] = hdKey
 	}
 	return m, nil

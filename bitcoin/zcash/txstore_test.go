@@ -1,11 +1,10 @@
 package zcash
 
 import (
-	"encoding/hex"
+	"bytes"
 	"testing"
 	"time"
 
-	"github.com/OpenBazaar/multiwallet/client"
 	"github.com/OpenBazaar/multiwallet/keys"
 	wallet "github.com/OpenBazaar/wallet-interface"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
@@ -27,14 +26,15 @@ func TestTxStoreIngestAddsTxnsToDB(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	hash, _ := chainhash.NewHashFromStr("a")
-	config.DB.Stxos().Put(wallet.Stxo{SpendTxid: *hash})
-	txn := client.Transaction{
+	txn := &wire.MsgTx{
 		Version: 1,
-		Txid:    hash.String(),
-		Inputs:  []client.Input{{}},
+		TxIn:    []*wire.TxIn{{}},
+		TxOut: []*wire.TxOut{
+			{Value: 123400000, PkScript: nil},
+		},
 	}
-	if err := txStore.Ingest(txn, nil); err != nil {
+	config.DB.Stxos().Put(wallet.Stxo{SpendTxid: txn.TxHash()})
+	if _, err := txStore.Ingest(txn, nil, 1); err != nil {
 		t.Fatal(err)
 	}
 
@@ -60,15 +60,14 @@ func TestTxStoreIngestIgnoresDuplicates(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	hash, _ := chainhash.NewHashFromStr("a")
-	config.DB.Stxos().Put(wallet.Stxo{SpendTxid: *hash})
-	txn := client.Transaction{
-		Txid:    hash.String(),
+	txn := &wire.MsgTx{
 		Version: 1,
-		Inputs:  []client.Input{{}},
+		TxIn:    []*wire.TxIn{{}},
+		TxOut:   []*wire.TxOut{{}},
 	}
+	config.DB.Stxos().Put(wallet.Stxo{SpendTxid: txn.TxHash()})
 	for i := 0; i < 2; i++ {
-		if err := txStore.Ingest(txn, nil); err != nil {
+		if _, err := txStore.Ingest(txn, nil, 1); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -102,27 +101,23 @@ func TestTxStoreIngestIgnoresUnconfirmedDoubleSpends(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	script, err := PayToAddrScript(address)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	receivedTxid, _ := chainhash.NewHashFromStr("a")
-	spentTxid, _ := chainhash.NewHashFromStr("b")
-	existingTxn := client.Transaction{
-		Version:       1,
-		Txid:          spentTxid.String(),
-		BlockHeight:   1,
-		Confirmations: 10,
-		Inputs:        []client.Input{{Txid: receivedTxid.String(), Vout: 0}},
-		Outputs: []client.Output{
-			{
-				ScriptPubKey: client.OutScript{
-					Addresses: []string{address.EncodeAddress()},
-					Type:      "pubkeyhash",
-				},
-				Value: 1.234,
-				N:     0,
-			},
+	existingTxn := &wire.MsgTx{
+		Version: 1,
+		TxIn: []*wire.TxIn{
+			{PreviousOutPoint: wire.OutPoint{Hash: *receivedTxid, Index: 0}},
+		},
+		TxOut: []*wire.TxOut{
+			{Value: 123400000, PkScript: script},
 		},
 	}
-	if err := txStore.Ingest(existingTxn, nil); err != nil {
+	config.DB.Stxos().Put(wallet.Stxo{SpendTxid: existingTxn.TxHash()})
+	if _, err := txStore.Ingest(existingTxn, nil, 1); err != nil {
 		t.Fatal(err)
 	}
 
@@ -135,25 +130,17 @@ func TestTxStoreIngestIgnoresUnconfirmedDoubleSpends(t *testing.T) {
 		t.Errorf("Expected 1 txn, got: %d", len(txns))
 	}
 
-	newHash, _ := chainhash.NewHashFromStr("b")
-	txn := client.Transaction{
-		Version:       1,
-		Txid:          newHash.String(),
-		BlockHeight:   11,
-		Confirmations: 0,
-		Inputs:        []client.Input{{Txid: receivedTxid.String(), Vout: 0}},
-		Outputs: []client.Output{
-			{
-				ScriptPubKey: client.OutScript{
-					Addresses: []string{address.EncodeAddress()},
-					Type:      "pubkeyhash",
-				},
-				Value: 1.234,
-				N:     0,
-			},
+	txn := &wire.MsgTx{
+		Version: 1,
+		TxIn: []*wire.TxIn{
+			{PreviousOutPoint: wire.OutPoint{Hash: *receivedTxid, Index: 0}},
+		},
+		TxOut: []*wire.TxOut{
+			{Value: 123400000, PkScript: script},
 		},
 	}
-	if err := txStore.Ingest(txn, nil); err != nil {
+	config.DB.Stxos().Put(wallet.Stxo{SpendTxid: txn.TxHash()})
+	if _, err := txStore.Ingest(txn, nil, 11); err != nil {
 		t.Fatal(err)
 	}
 
@@ -186,38 +173,30 @@ func TestTxStoreIngestMarksExistingDoubleSpendsAsDead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	receivedTxid, _ := chainhash.NewHashFromStr("a")
-	spentTxid, _ := chainhash.NewHashFromStr("b")
-	existingOutputs := []client.Output{
-		{
-			ScriptPubKey: client.OutScript{
-				Addresses: []string{address.EncodeAddress()},
-				Type:      "pubkeyhash",
-			},
-			Value: 1.234,
-			N:     0,
-		},
-	}
-	existingTxn := client.Transaction{
-		Version:       1,
-		Txid:          spentTxid.String(),
-		BlockHeight:   1,
-		Confirmations: 10,
-		Inputs:        []client.Input{{Txid: receivedTxid.String(), Vout: 0}},
-		Outputs:       existingOutputs,
-	}
-	// Eugh, we need 2 different types here (only one is serializable).
-	existingBytes, err := (&Transaction{
-		Version:   1,
-		Inputs:    []Input{{Txid: receivedTxid.String(), Vout: 0}},
-		Outputs:   existingOutputs,
-		Timestamp: time.Now(),
-	}).MarshalBinary()
+	script, err := PayToAddrScript(address)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := txStore.Ingest(existingTxn, existingBytes); err != nil {
+	config.DB.WatchedScripts().Put(script)
+	txStore.PopulateAdrs()
+
+	receivedTxid, _ := chainhash.NewHashFromStr("a")
+	// Eugh, we need 2 different types here (only one is serializable).
+	existingTxn := &wire.MsgTx{
+		Version: 1,
+		TxIn: []*wire.TxIn{
+			{PreviousOutPoint: wire.OutPoint{Hash: *receivedTxid, Index: 0}},
+		},
+		TxOut: []*wire.TxOut{
+			{Value: 123400000, PkScript: script},
+		},
+		LockTime: uint32(time.Now().Unix()),
+	}
+	buf := &bytes.Buffer{}
+	if err := existingTxn.BtcEncode(buf, 0, wire.BaseEncoding); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := txStore.Ingest(existingTxn, buf.Bytes(), 1); err != nil {
 		t.Fatal(err)
 	}
 
@@ -230,16 +209,17 @@ func TestTxStoreIngestMarksExistingDoubleSpendsAsDead(t *testing.T) {
 		t.Errorf("Expected old utxo to have been added")
 	}
 
-	doubleTxid, _ := chainhash.NewHashFromStr("c")
-	txn := client.Transaction{
-		Version:       1,
-		Txid:          doubleTxid.String(),
-		BlockHeight:   9,
-		Confirmations: 2,
-		Inputs:        []client.Input{{Txid: receivedTxid.String(), Vout: 0}},
-		Outputs:       existingOutputs, // Doesn't matter as long as it is relevant
+	txn := &wire.MsgTx{
+		Version: 1,
+		TxIn: []*wire.TxIn{
+			{PreviousOutPoint: wire.OutPoint{Hash: *receivedTxid, Index: 0}},
+		},
+		TxOut: []*wire.TxOut{
+			// Doesn't matter as long as it is relevant
+			{Value: 123400000, PkScript: script},
+		},
 	}
-	if err := txStore.Ingest(txn, nil); err != nil {
+	if _, err := txStore.Ingest(txn, nil, 9); err != nil {
 		t.Fatal(err)
 	}
 
@@ -248,29 +228,42 @@ func TestTxStoreIngestMarksExistingDoubleSpendsAsDead(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, u := range utxos {
-		if u.Op.Hash.String() == existingTxn.Txid {
+		existingHash := existingTxn.TxHash()
+		if u.Op.Hash.IsEqual(&existingHash) {
 			t.Errorf("Expected old utxo to have been removed")
 		}
 	}
 }
 
 func TestTxStoreIngestRejectsInvalidTxns(t *testing.T) {
-	txStore, err := NewTxStore(nil, nil, nil)
+	config := testConfig(t)
+	seed := b39.NewSeed(config.Mnemonic, "")
+	mPrivKey, _ := hd.NewMaster(seed, config.Params)
+	keyManager, err := keys.NewKeyManager(config.DB.Keys(), config.Params, mPrivKey, keys.Zcash, keyToAddress)
+	txStore, err := NewTxStore(config.Params, config.DB, keyManager)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	for _, tc := range []struct {
 		err string
-		txn client.Transaction
+		txn *wire.MsgTx
 	}{
 		{
-			err: "transaction version must be greater than or equal to 1",
-			txn: client.Transaction{Version: 0},
+			err: "transaction version must be greater than 0",
+			txn: &wire.MsgTx{Version: 0, TxIn: []*wire.TxIn{{}}, TxOut: []*wire.TxOut{{}}},
+		},
+		{
+			err: "transaction version must be less than 3",
+			txn: &wire.MsgTx{Version: 3, TxIn: []*wire.TxIn{{}}, TxOut: []*wire.TxOut{{}}},
 		},
 		{
 			err: "transaction has no inputs",
-			txn: client.Transaction{Version: 1},
+			txn: &wire.MsgTx{Version: 1, TxOut: []*wire.TxOut{{}}},
+		},
+		{
+			err: "transaction has no outputs",
+			txn: &wire.MsgTx{Version: 1, TxIn: []*wire.TxIn{{}}},
 		},
 		/*
 			{
@@ -286,11 +279,10 @@ func TestTxStoreIngestRejectsInvalidTxns(t *testing.T) {
 		// TODO: Other rules inherited from Bitcoin
 	} {
 		t.Run(tc.err, func(t *testing.T) {
-			err := txStore.Ingest(tc.txn, nil)
+			_, err := txStore.Ingest(tc.txn, nil, 1)
 			if err == nil {
 				t.Errorf("Did not reject invalid txn")
-			}
-			if err.Error() != tc.err {
+			} else if err.Error() != tc.err {
 				t.Errorf("Expected %q error, got: %q", tc.err, err.Error())
 			}
 		})
@@ -324,24 +316,23 @@ func TestTxStoreIngestUpdatesUtxos(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	script, err := PayToAddrScript(address)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config.DB.WatchedScripts().Put(script)
+	txStore.PopulateAdrs()
 
-	txn := client.Transaction{
+	txn := &wire.MsgTx{
 		Version: 1,
-		Inputs: []client.Input{
+		TxIn: []*wire.TxIn{
 			{},
 		},
-		Outputs: []client.Output{
-			{
-				ScriptPubKey: client.OutScript{
-					Addresses: []string{address.EncodeAddress()},
-					Type:      "pubkeyhash",
-				},
-				Value: 1.234,
-				N:     0,
-			},
+		TxOut: []*wire.TxOut{
+			{Value: 123400000, PkScript: script},
 		},
 	}
-	if err := txStore.Ingest(txn, nil); err != nil {
+	if _, err := txStore.Ingest(txn, nil, 1); err != nil {
 		t.Fatal(err)
 	}
 
@@ -370,26 +361,22 @@ func TestTxStoreIngestOnlyStoresRelevantTxns(t *testing.T) {
 	if len(keys) == 0 {
 		t.Fatal(err)
 	}
+	// random address
+	address, err := keyToAddress(keys[0], config.Params)
+	script, err := PayToAddrScript(address)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Don't call PopulateAdrs here, so txstore doesn't know about this address
 
-	hash, _ := chainhash.NewHashFromStr("a")
-	txn := client.Transaction{
-		Txid:    hash.String(),
+	txn := &wire.MsgTx{
 		Version: 1,
-		Inputs: []client.Input{
-			{},
-		},
-		Outputs: []client.Output{
-			{
-				ScriptPubKey: client.OutScript{
-					Addresses: []string{"SomeOtherAddress"},
-					Type:      "pubkeyhash",
-				},
-				Value: 1.234,
-				N:     0,
-			},
+		TxIn:    []*wire.TxIn{{}},
+		TxOut: []*wire.TxOut{
+			{Value: 123400000, PkScript: script},
 		},
 	}
-	if err := txStore.Ingest(txn, nil); err != nil {
+	if _, err := txStore.Ingest(txn, nil, 1); err != nil {
 		t.Fatal(err)
 	}
 
@@ -424,14 +411,9 @@ func TestTxStoreIngestAddsStxos(t *testing.T) {
 	}
 
 	// Set up a previous txn where we received some utxos
-	outScript := client.OutScript{
-		Script:    client.Script{Hex: "abcd"},
-		Addresses: []string{address.EncodeAddress()},
-		Type:      "pubkeyhash",
-	}
-	scriptBytes, err := hex.DecodeString(outScript.Script.Hex)
+	outScript, err := PayToAddrScript(address)
 	if err != nil {
-		t.Fatalf("could not decode utxo for %v: %v", outScript, err)
+		t.Fatal(err)
 	}
 	prevHash, _ := chainhash.NewHashFromStr("a")
 	sequence := uint32(898) // position in the block outputs
@@ -439,42 +421,39 @@ func TestTxStoreIngestAddsStxos(t *testing.T) {
 		Op:           wire.OutPoint{*prevHash, sequence},
 		AtHeight:     1,
 		Value:        1.2345 * 1e8,
-		ScriptPubkey: scriptBytes,
+		ScriptPubkey: outScript,
 		WatchOnly:    false,
 	}
 	config.DB.Utxos().Put(receivedUtxo)
 
+	burnKey, err := keyManager.GetFreshKey(wallet.EXTERNAL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	burnAddress, err := keyToAddress(burnKey, config.Params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	burnScript, err := PayToAddrScript(burnAddress)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Don't call PopulateAdrs here, so txstore doesn't know about this address
+
 	// Ingest the initial stxo-containing txn
-	txn := client.Transaction{
-		Version:     1,
-		BlockHeight: 5,
-		Inputs: []client.Input{
-			{
-				Txid: prevHash.String(),
-				Vout: int(sequence),
-				Addr: address.EncodeAddress(),
-			},
+	txn := &wire.MsgTx{
+		Version: 1,
+		TxIn: []*wire.TxIn{
+			{PreviousOutPoint: wire.OutPoint{Hash: *prevHash, Index: sequence}},
 		},
-		Outputs: []client.Output{
-			{
-				// Burn some money
-				ScriptPubKey: client.OutScript{
-					Script:    client.Script{Hex: "0000"},
-					Addresses: []string{"0000"},
-					Type:      "pubkeyhash",
-				},
-				Value: 1.1,
-				N:     0,
-			},
-			{
-				// Return the change
-				ScriptPubKey: outScript,
-				Value:        1.2345 - 1.1,
-				N:            1,
-			},
+		TxOut: []*wire.TxOut{
+			// Burn some money
+			{Value: 110000000, PkScript: burnScript},
+			// Return the change
+			{Value: 123450000 - 110000000, PkScript: outScript},
 		},
 	}
-	if err := txStore.Ingest(txn, nil); err != nil {
+	if _, err := txStore.Ingest(txn, nil, 5); err != nil {
 		t.Fatal(err)
 	}
 
@@ -507,8 +486,8 @@ func TestTxStoreIngestAddsStxos(t *testing.T) {
 	if len(txns) != 1 {
 		t.Fatalf("Expected 1 txn, got: %d", len(txns))
 	}
-	if txns[0].Value != -1.1*1e8 {
-		t.Errorf("Expected txn value %d, got: %d", int64(-1.1*1e8), txns[0].Value)
+	if txns[0].Value != -123450000 {
+		t.Errorf("Expected txn value %d, got: %d", int64(-123450000), txns[0].Value)
 	}
 }
 
@@ -534,64 +513,58 @@ func TestTxStoreIngestUpdatesStxosHeight(t *testing.T) {
 	}
 
 	// Set up a previous txn where we received some utxos
-	outScript := client.OutScript{
-		Script:    client.Script{Hex: "abcd"},
-		Addresses: []string{address.EncodeAddress()},
-		Type:      "pubkeyhash",
-	}
-	scriptBytes, err := hex.DecodeString(outScript.Script.Hex)
+	outScript, err := PayToAddrScript(address)
 	if err != nil {
-		t.Fatalf("could not decode utxo for %v: %v", outScript, err)
+		t.Fatal(err)
 	}
+	config.DB.WatchedScripts().Put(outScript)
+	txStore.PopulateAdrs()
+
+	burnKey, err := keyManager.GetFreshKey(wallet.EXTERNAL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	burnAddress, err := keyToAddress(burnKey, config.Params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	burnScript, err := PayToAddrScript(burnAddress)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Don't call PopulateAdrs here, so txstore doesn't know about this address
+
+	// Ingest the new stxo-containing txn
 	prevHash, _ := chainhash.NewHashFromStr("a")
 	sequence := uint32(898) // position in the block outputs
+	txn := &wire.MsgTx{
+		Version: 1,
+		TxIn: []*wire.TxIn{
+			{PreviousOutPoint: wire.OutPoint{Hash: *prevHash, Index: sequence}},
+		},
+		TxOut: []*wire.TxOut{
+			// Burn some money
+			{Value: 110000000, PkScript: burnScript},
+			// Return the change
+			{Value: 123450000 - 110000000, PkScript: outScript},
+		},
+	}
 	existingStxo := wallet.Stxo{
 		SpendHeight: 0,
-		SpendTxid:   *prevHash,
+		SpendTxid:   txn.TxHash(),
 		Utxo: wallet.Utxo{
 			Op:           wire.OutPoint{*prevHash, sequence},
 			AtHeight:     1,
-			Value:        1.2345 * 1e8,
-			ScriptPubkey: scriptBytes,
-			WatchOnly:    false,
+			Value:        123450000,
+			ScriptPubkey: outScript,
+			WatchOnly:    true,
 		},
 	}
 	if err := config.DB.Stxos().Put(existingStxo); err != nil {
 		t.Fatal(err)
 	}
 
-	// Ingest the new stxo-containing txn
-	txn := client.Transaction{
-		Txid:        prevHash.String(),
-		Version:     1,
-		BlockHeight: 5,
-		Inputs: []client.Input{
-			{
-				Txid: prevHash.String(),
-				Vout: int(sequence),
-				Addr: address.EncodeAddress(),
-			},
-		},
-		Outputs: []client.Output{
-			{
-				// Burn some money
-				ScriptPubKey: client.OutScript{
-					Script:    client.Script{Hex: "0000"},
-					Addresses: []string{"0000"},
-					Type:      "pubkeyhash",
-				},
-				Value: 1.1,
-				N:     0,
-			},
-			{
-				// Return the change
-				ScriptPubKey: outScript,
-				Value:        1.2345 - 1.1,
-				N:            1,
-			},
-		},
-	}
-	if err := txStore.Ingest(txn, nil); err != nil {
+	if _, err := txStore.Ingest(txn, nil, 5); err != nil {
 		t.Fatal(err)
 	}
 

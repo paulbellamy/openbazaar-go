@@ -3,6 +3,7 @@ package zcash
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 
@@ -44,15 +45,24 @@ func NewTxStore(p *chaincfg.Params, db wallet.Datastore, km *keys.KeyManager) (*
 	return txs, nil
 }
 
+func validateTransaction(tx *wire.MsgTx) error {
+	if tx.Version <= 0 {
+		return fmt.Errorf("transaction version must be greater than 0")
+	}
+	if tx.Version >= 3 {
+		return fmt.Errorf("transaction version must be less than 3")
+	}
+	utilTx := btcutil.NewTx(tx) // convert for validation
+	// Checks basic stuff like there are inputs and ouputs
+	return blockchain.CheckTransactionSanity(utilTx)
+}
+
 // Ingest puts a tx into the DB atomically.  This can result in a
 // gain, a loss, or no result.  Gain or loss in satoshis is returned.
 func (ts *TxStore) Ingest(tx *wire.MsgTx, raw []byte, height int32) (uint32, error) {
 	var hits uint32
 	var err error
-	// Tx has been OK'd by SPV; check tx sanity
-	utilTx := btcutil.NewTx(tx) // convert for validation
-	// Checks basic stuff like there are inputs and ouputs
-	err = blockchain.CheckTransactionSanity(utilTx)
+	err = validateTransaction(tx)
 	if err != nil {
 		return hits, err
 	}
