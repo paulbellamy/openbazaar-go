@@ -399,7 +399,6 @@ func (w *Wallet) broadcastWireTx(tx *wire.MsgTx) (*chainhash.Hash, error) {
 }
 
 func (w *Wallet) buildTxn(amount int64, addr btc.Address, feeLevel wallet.FeeLevel) (*wire.MsgTx, error) {
-	fmt.Printf("[DEBUG] building txn to %v\n", addr.EncodeAddress())
 	script, err := PayToAddrScript(addr)
 	if err != nil {
 		return nil, err
@@ -436,7 +435,6 @@ func (w *Wallet) buildTxn(amount int64, addr btc.Address, feeLevel wallet.FeeLev
 			inputs = append(inputs, in)
 			additionalPrevScripts[*outpoint] = c.PkScript()
 			key := coinMap[c]
-			fmt.Printf("[DEBUG] Looking up key from coinmap: %+v -> %v\n", c, key)
 			addr, err := keyToAddress(key, w.Params())
 			if err != nil {
 				continue
@@ -446,7 +444,6 @@ func (w *Wallet) buildTxn(amount int64, addr btc.Address, feeLevel wallet.FeeLev
 				continue
 			}
 			wif, _ := btc.NewWIF(privKey, w.Params(), true)
-			fmt.Printf("[DEBUG] Caching key for address: %v -> %v\n", addr.EncodeAddress(), wif)
 			additionalKeysByAddress[addr.EncodeAddress()] = wif
 		}
 		return total, inputs, scripts, nil
@@ -478,29 +475,11 @@ func (w *Wallet) buildTxn(amount int64, addr btc.Address, feeLevel wallet.FeeLev
 	txsort.InPlaceSort(authoredTx.Tx)
 
 	// Sign tx
-	getKey := txscript.KeyClosure(func(addr btc.Address) (*btcec.PrivateKey, bool, error) {
-		addrStr := addr.EncodeAddress()
-		wif := additionalKeysByAddress[addrStr]
-		fmt.Printf("[DEBUG] Looking up key for: %v -> %v\n", addr.EncodeAddress(), wif)
-		return wif.PrivKey, wif.CompressPubKey, nil
-	})
-	getScript := txscript.ScriptClosure(func(
-		addr btc.Address) ([]byte, error) {
-		return []byte{}, nil
-	})
-	fmt.Printf("[DEBUG] TXINPUTS: %+v\n", authoredTx.Tx.TxIn[0])
-	for i, txIn := range authoredTx.Tx.TxIn {
-		prevOutScript := additionalPrevScripts[txIn.PreviousOutPoint]
-		// TODO: We can't use this as it embeds bitcoin-specific script address extraction and encoding
-		script, err := txscript.SignTxOutput(w.Params(),
-			authoredTx.Tx, i, prevOutScript, txscript.SigHashAll, getKey,
-			getScript, txIn.SignatureScript)
-		if err != nil {
-			return nil, errors.New("Failed to sign transaction")
-		}
-		txIn.SignatureScript = script
+	signed, err := w.Sign(authoredTx.Tx, txscript.SigHashAll, additionalPrevScripts, additionalKeysByAddress)
+	if err != nil {
+		return nil, fmt.Errorf("failed to sign transaction: %v", err)
 	}
-	return authoredTx.Tx, nil
+	return signed, nil
 }
 
 func (w *Wallet) gatherCoins() (map[coinset.Coin]*hd.ExtendedKey, error) {
@@ -518,7 +497,7 @@ func (w *Wallet) gatherCoins() (map[coinset.Coin]*hd.ExtendedKey, error) {
 				continue
 			}
 		*/
-		c := spvwallet.NewCoin(u.Op.Hash.CloneBytes(), u.Op.Index, btc.Amount(u.Value*100000000), int64(tipHeight)-int64(u.AtHeight), u.ScriptPubkey)
+		c := spvwallet.NewCoin(u.Op.Hash.CloneBytes(), u.Op.Index, btc.Amount(u.Value), int64(tipHeight)-int64(u.AtHeight), u.ScriptPubkey)
 
 		addr, err := w.ScriptToAddress(u.ScriptPubkey)
 		if err != nil {
@@ -528,7 +507,6 @@ func (w *Wallet) gatherCoins() (map[coinset.Coin]*hd.ExtendedKey, error) {
 		if err != nil {
 			continue
 		}
-		fmt.Printf("[DEBUG] found coin: %+v -> %+v, scriptPubKey: %v\n", addr.EncodeAddress(), hdKey, u.ScriptPubkey)
 		m[c] = hdKey
 	}
 	return m, nil
@@ -769,6 +747,9 @@ func (w *Wallet) SweepAddress(utxos []wallet.Utxo, address *btc.Address, key *hd
 
 // Create a signature for a multisig transaction
 func (w *Wallet) CreateMultisigSignature(ins []wallet.TransactionInput, outs []wallet.TransactionOutput, key *hd.ExtendedKey, redeemScript []byte, feePerByte uint64) ([]wallet.Signature, error) {
+	if len(outs) <= 0 {
+		return nil, fmt.Errorf("transaction has no outputs")
+	}
 	var sigs []wallet.Signature
 	tx := wire.NewMsgTx(wire.TxVersion)
 	for _, in := range ins {

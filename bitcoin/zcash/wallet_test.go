@@ -579,25 +579,12 @@ func TestWalletSpend(t *testing.T) {
 	defer w.Close()
 
 	address := w.NewAddress(wallet.EXTERNAL)
-	key, err := w.MasterPrivateKey().ECPrivKey()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := w.DB.Keys().ImportKey(address.ScriptAddress(), key); err != nil {
-		t.Fatal(err)
-	}
-	masterAddr, err := keyToAddress(w.MasterPrivateKey(), w.Params())
-	if err := w.DB.Keys().ImportKey(masterAddr.ScriptAddress(), key); err != nil {
-		t.Fatal(err)
-	}
-	fmt.Printf("[DEBUG] Imported key for: %v -> %v\n", address.EncodeAddress(), key)
 	var expectedAmount int64 = 100000
 	inputHash, _ := chainhash.NewHashFromStr("c")
 	scriptPubkey, err := w.AddressToScript(address)
 	if err != nil {
 		t.Fatal(err)
 	}
-	fmt.Printf("[DEBUG] Utxo scriptPubKey: %v\n", scriptPubkey)
 	utxo1 := wallet.Utxo{
 		Op:           wire.OutPoint{Hash: *inputHash, Index: 0},
 		AtHeight:     12,
@@ -630,7 +617,7 @@ func TestWalletSpend(t *testing.T) {
 		t.Errorf("Expected 1 inputs, got: %d", len(txn.TxIn))
 	} else {
 		// Check the input is the expected utxo
-		if txn.TxIn[0].PreviousOutPoint.Hash.IsEqual(&utxo1.Op.Hash) {
+		if !txn.TxIn[0].PreviousOutPoint.Hash.IsEqual(&utxo1.Op.Hash) {
 			t.Errorf("Expected input txid %q, got input txid: %q", utxo1.Op.Hash.String(), txn.TxIn[0].PreviousOutPoint.Hash.String())
 		}
 		if txn.TxIn[0].PreviousOutPoint.Index != utxo1.Op.Index {
@@ -693,7 +680,7 @@ func TestWalletSpend(t *testing.T) {
 			// Check the sum of the output values is our expected amount
 			value := txn.TxOut[1].Value
 			if value != expectedChange {
-				t.Errorf("Expected change %d, got outputs: %d", expectedChange, value)
+				t.Errorf("Expected change %d, got change: %d", expectedChange, value)
 			}
 		}
 	}
@@ -704,6 +691,8 @@ func TestWalletSpendRejectsDustAmounts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	w.Start()
+	defer w.Close()
 	address := w.CurrentAddress(wallet.EXTERNAL)
 	txHash, err := w.Spend(1, address, wallet.NORMAL)
 	expectedError := wallet.ErrorDustAmount
@@ -723,12 +712,16 @@ func TestWalletSpendRejectsInsufficientFunds(t *testing.T) {
 			getLatestBlock: func() (*client.Block, error) {
 				return &client.Block{Hash: expectedHash.String(), Height: int(expectedHeight)}, nil
 			},
+			getTransactions: func(addrs []btc.Address) ([]client.Transaction, error) { return nil, nil },
+			estimateFee:     func(nbBlocks int) (int, error) { return 1, nil },
 		}, nil
 	}
 	w, err := NewWallet(testConfig(t))
 	if err != nil {
 		t.Fatal(err)
 	}
+	w.Start()
+	defer w.Close()
 
 	// Wallet is empty
 	address := w.CurrentAddress(wallet.EXTERNAL)
