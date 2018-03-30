@@ -183,12 +183,7 @@ func (w *Wallet) subscribeToAllAddresses() {
 }
 
 func (w *Wallet) loadInitialTransactions() {
-	addrs, err := keysToAddresses(w.Params(), w.keyManager.GetKeys())
-	if err != nil {
-		log.Error(err)
-		return
-	}
-	txns, err := w.insight.GetTransactions(addrs)
+	txns, err := w.insight.GetTransactions(w.allWatchedAddrs())
 	if err != nil {
 		log.Error(err)
 		return
@@ -258,6 +253,7 @@ func (w *Wallet) NewAddress(purpose wallet.KeyPurpose) btc.Address {
 	key, _ := w.keyManager.GetFreshKey(purpose)
 	addr, _ := keyToAddress(key, w.Params())
 	w.DB.Keys().MarkKeyAsUsed(addr.ScriptAddress())
+	w.addWatchedAddr(addr)
 	return addr
 }
 
@@ -898,6 +894,16 @@ func (w *Wallet) addWatchedAddr(addr btc.Address) {
 		w.insight.ListenAddress(addr)
 	}
 	w.addrSubscriptionsMutex.Unlock()
+}
+
+func (w *Wallet) allWatchedAddrs() []btc.Address {
+	w.addrSubscriptionsMutex.Lock()
+	var addrs []btc.Address
+	for addr := range w.addrSubscriptions {
+		addrs = append(addrs, addr)
+	}
+	w.addrSubscriptionsMutex.Unlock()
+	return addrs
 }
 
 // Add a callback for incoming transactions
