@@ -440,7 +440,7 @@ func (w *Wallet) buildTxn(amount int64, addr btc.Address, feeLevel wallet.FeeLev
 				continue
 			}
 			wif, _ := btc.NewWIF(privKey, w.Params(), true)
-			additionalKeysByAddress[addr.EncodeAddress()] = wif
+			additionalKeysByAddress[hex.EncodeToString(addr.ScriptAddress())] = wif
 		}
 		return total, inputs, scripts, nil
 	}
@@ -471,11 +471,25 @@ func (w *Wallet) buildTxn(amount int64, addr btc.Address, feeLevel wallet.FeeLev
 	txsort.InPlaceSort(authoredTx.Tx)
 
 	// Sign tx
-	signed, err := w.Sign(authoredTx.Tx, txscript.SigHashAll, additionalPrevScripts, additionalKeysByAddress)
-	if err != nil {
-		return nil, fmt.Errorf("failed to sign transaction: %v", err)
+	getKey := txscript.KeyClosure(func(addr btc.Address) (*btcec.PrivateKey, bool, error) {
+		wif := additionalKeysByAddress[hex.EncodeToString(addr.ScriptAddress())]
+		return wif.PrivKey, wif.CompressPubKey, nil
+	})
+	getScript := txscript.ScriptClosure(func(
+		addr btc.Address) ([]byte, error) {
+		return []byte{}, nil
+	})
+	for i, txIn := range authoredTx.Tx.TxIn {
+		prevOutScript := additionalPrevScripts[txIn.PreviousOutPoint]
+		script, err := txscript.SignTxOutput(w.Params(),
+			authoredTx.Tx, i, prevOutScript, txscript.SigHashAll, getKey,
+			getScript, txIn.SignatureScript)
+		if err != nil {
+			return nil, errors.New("Failed to sign transaction")
+		}
+		txIn.SignatureScript = script
 	}
-	return signed, nil
+	return authoredTx.Tx, nil
 }
 
 func (w *Wallet) gatherCoins() (map[coinset.Coin]*hd.ExtendedKey, error) {
@@ -497,11 +511,11 @@ func (w *Wallet) gatherCoins() (map[coinset.Coin]*hd.ExtendedKey, error) {
 
 		addr, err := w.ScriptToAddress(u.ScriptPubkey)
 		if err != nil {
-			continue
+			return nil, err
 		}
 		hdKey, err := w.hdKeyForAddress(addr)
 		if err != nil {
-			continue
+			return nil, err
 		}
 		m[c] = hdKey
 	}
