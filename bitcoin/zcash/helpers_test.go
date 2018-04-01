@@ -382,6 +382,7 @@ func (f *FakeWatchedScripts) Delete(scriptPubKey []byte) error {
 
 type FakeInsightClient struct {
 	getLatestBlock    func() (*client.Block, error)
+	getBlocksBefore   func(time.Time, int) (*client.BlockList, error)
 	getTransactions   func(addrs []btcutil.Address) ([]client.Transaction, error)
 	getRawTransaction func(txid string) ([]byte, error)
 	transactionNotify func() <-chan client.Transaction
@@ -396,6 +397,13 @@ func (f *FakeInsightClient) GetLatestBlock() (*client.Block, error) {
 		panic("not implemented")
 	}
 	return f.getLatestBlock()
+}
+
+func (f *FakeInsightClient) GetBlocksBefore(t time.Time, limit int) (*client.BlockList, error) {
+	if f.getBlocksBefore == nil {
+		panic("not implemented")
+	}
+	return f.getBlocksBefore(t, limit)
 }
 
 func (f *FakeInsightClient) GetTransactions(addrs []btcutil.Address) ([]client.Transaction, error) {

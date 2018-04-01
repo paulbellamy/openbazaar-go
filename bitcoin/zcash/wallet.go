@@ -58,6 +58,7 @@ var newInsightClient = func(url string, proxyDialer proxy.Dialer) (InsightClient
 
 type InsightClient interface {
 	GetLatestBlock() (*client.Block, error)
+	GetBlocksBefore(time.Time, int) (*client.BlockList, error)
 	GetTransactions(addrs []btc.Address) ([]client.Transaction, error)
 	GetRawTransaction(txid string) ([]byte, error)
 	TransactionNotify() <-chan client.Transaction
@@ -501,7 +502,7 @@ func (w *Wallet) gatherCoins() (map[coinset.Coin]*hd.ExtendedKey, error) {
 		return m, err
 	}
 	for _, u := range utxos {
-		if u.AtHeight <= 0 || u.AtHeight >= tipheight {
+		if u.AtHeight <= 0 || u.AtHeight >= int32(tipHeight) {
 			// not yet mined, or zero confirmations, so not spendable
 			continue
 		}
@@ -926,50 +927,73 @@ func (w *Wallet) AddTransactionListener(callback func(wallet.TransactionCallback
 
 func (w *Wallet) ReSyncBlockchain(fromDate time.Time) {
 	<-w.initChan
-	/*
-		_, err := w.findHeightBeforeTime(fromDate)
-		if err != nil {
-			log.Error(err)
-			return
+	// find last block before time
+	height, err := w.findHeightBeforeTime(fromDate)
+	if err != nil {
+		log.Errorf("unable to resync blockchain: %v", err)
+		return
+	}
+
+	// delete transactions after that block
+	txns, err := w.DB.Txns().GetAll(true)
+	if err != nil {
+		log.Errorf("unable to resync blockchain: %v", err)
+		return
+	}
+	for _, t := range txns {
+		if t.Height < height {
+			continue
 		}
-	*/
-	panic("not implemented")
+		hash, _ := chainhash.NewHashFromStr(t.Txid)
+		if err := w.DB.Txns().Delete(hash); err != nil {
+			log.Errorf("error resyncing blockchain: %v", err)
+		}
+	}
+
+	// delete utxos after that block
+	utxos, err := w.DB.Utxos().GetAll()
+	if err != nil {
+		log.Errorf("unable to resync blockchain: %v", err)
+		return
+	}
+	for _, u := range utxos {
+		if u.AtHeight < height {
+			// This will catch 0 height unconfirmed utxos as well.
+			continue
+		}
+		if err := w.DB.Utxos().Delete(u); err != nil {
+			log.Errorf("error resyncing blockchain: %v", err)
+		}
+	}
+
+	// delete stxos after that block
+	stxos, err := w.DB.Stxos().GetAll()
+	if err != nil {
+		log.Errorf("unable to resync blockchain: %v", err)
+		return
+	}
+	for _, s := range stxos {
+		if s.SpendHeight < height {
+			// This will catch 0 height unconfirmed stxos as well.
+			continue
+		}
+		if err := w.DB.Stxos().Delete(s); err != nil {
+			log.Errorf("error resyncing blockchain: %v", err)
+		}
+	}
+
+	// reload them all
+	w.loadInitialTransactions()
 }
 
-/*
+// findHeightBeforeTime finds the chain height of the best block before a timestamp
 func (w *Wallet) findHeightBeforeTime(ts time.Time) (int32, error) {
-	// Get the best block hash
-	resp, err := w.rpcClient.RawRequest("getbestblockhash", []json.RawMessage{})
-	if err != nil {
+	b, err := w.insight.GetBlocksBefore(ts, 1)
+	if err != nil || len(b.Blocks) != 1 {
 		return 0, err
 	}
-	hash := string(resp)[1 : len(string(resp))-1]
-
-	// Iterate over the block headers to check the timestamp
-	for {
-		h := `"` + hash + `"`
-		resp, err = w.rpcClient.RawRequest("getblockheader", []json.RawMessage{json.RawMessage(h)})
-		if err != nil {
-			return 0, err
-		}
-		type Respose struct {
-			Timestamp int64  `json:"time"`
-			PrevBlock string `json:"previousblockhash"`
-			Height    int32  `json:"height"`
-		}
-		r := new(Respose)
-		err = json.Unmarshal([]byte(resp), r)
-		if err != nil {
-			return 0, err
-		}
-		t := time.Unix(r.Timestamp, 0)
-		if t.Before(ts) || r.Height == 1 {
-			return r.Height, nil
-		}
-		hash = r.PrevBlock
-	}
+	return int32(b.Blocks[0].Height), nil
 }
-*/
 
 // Return the number of confirmations and the height for a transaction
 func (w *Wallet) GetConfirmations(txid chainhash.Hash) (confirms, atHeight uint32, err error) {

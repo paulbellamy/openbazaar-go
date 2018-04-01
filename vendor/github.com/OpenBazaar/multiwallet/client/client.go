@@ -224,7 +224,7 @@ func (i *InsightClient) GetBlocks(fromIndex int) ([]Block, error) {
 	var blocks []Block
 	to := time.Now().UTC()
 	for {
-		page, err := i.getBlocks(to, 200)
+		page, err := i.GetBlocksBefore(to, 200)
 		if err != nil {
 			return blocks, err
 		}
@@ -245,7 +245,7 @@ func (i *InsightClient) GetBlocks(fromIndex int) ([]Block, error) {
 	return blocks, nil
 }
 
-func (i *InsightClient) getBlocks(to time.Time, limit int) (*BlockList, error) {
+func (i *InsightClient) GetBlocksBefore(to time.Time, limit int) (*BlockList, error) {
 	resp, err := i.doRequest("blocks", http.MethodGet, nil, url.Values{
 		"blockDate":      {to.Format("2006-01-02")},
 		"startTimestamp": {fmt.Sprint(to.Unix())},
@@ -279,7 +279,7 @@ func (i *InsightClient) GetBlockIndex(height int) (*Block, error) {
 
 // GetLatestBlock loads a summary of the latest block
 func (i *InsightClient) GetLatestBlock() (*Block, error) {
-	page, err := i.getBlocks(time.Now().UTC(), 1)
+	page, err := i.GetBlocksBefore(time.Now().UTC(), 1)
 	if err != nil || len(page.Blocks) == 0 {
 		return nil, err
 	}
