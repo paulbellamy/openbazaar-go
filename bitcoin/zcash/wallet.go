@@ -52,9 +52,20 @@ type Config struct {
 }
 
 // Stubbable for testing
-var newInsightClient = func(url string, proxyDialer proxy.Dialer) (InsightClient, error) {
-	return client.NewInsightClient(url, proxyDialer)
-}
+var (
+	newInsightClient = func(url string, proxyDialer proxy.Dialer) (InsightClient, error) {
+		return client.NewInsightClient(url, proxyDialer)
+	}
+
+	// TODO: Find if there are insight apis for networks other than mainnet, we
+	// really shouldn't be using mainnet insight apis for test and regression
+	// networks.
+	insightURLs = map[string]string{
+		chaincfg.TestNet3Params.Name:      "https://zcash.blockexplorer.com/api/",
+		chaincfg.RegressionNetParams.Name: "https://zcash.blockexplorer.com/api/",
+		chaincfg.MainNetParams.Name:       "https://zcash.blockexplorer.com/api/",
+	}
+)
 
 type InsightClient interface {
 	GetLatestBlock() (*client.Block, error)
@@ -76,7 +87,11 @@ func NewWallet(config Config) (*Wallet, error) {
 	if err != nil {
 		return nil, fmt.Errorf("error initializing key manager: %v", err)
 	}
-	insight, err := newInsightClient(fmt.Sprintf("https://%s/api", config.TrustedPeer), config.Proxy)
+	insightURL, ok := insightURLs[config.Params.Name]
+	if !ok {
+		return nil, fmt.Errorf("unsupported network: %v", config.Params.Name)
+	}
+	insight, err := newInsightClient(insightURL, config.Proxy)
 	if err != nil {
 		return nil, fmt.Errorf("error initializing insight client: %v", err)
 	}
