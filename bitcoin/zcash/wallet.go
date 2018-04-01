@@ -643,7 +643,7 @@ func (w *Wallet) EstimateSpendFee(amount int64, feeLevel wallet.FeeLevel) (uint6
 	for _, input := range txn.TxIn {
 		for _, utxo := range utxos {
 			if outpointsEqual(utxo.Op, input.PreviousOutPoint) {
-				inval += int64(utxo.Value * 100000000)
+				inval += int64(utxo.Value)
 				break
 			}
 		}
