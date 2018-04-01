@@ -501,12 +501,11 @@ func (w *Wallet) gatherCoins() (map[coinset.Coin]*hd.ExtendedKey, error) {
 		return m, err
 	}
 	for _, u := range utxos {
-		/*
-			// TODO: Calculate if spendable
-			if !u.Spendable {
-				continue
-			}
-		*/
+		if u.AtHeight <= 0 || u.AtHeight >= tipheight {
+			// not yet mined, or zero confirmations, so not spendable
+			continue
+		}
+
 		c := spvwallet.NewCoin(u.Op.Hash.CloneBytes(), u.Op.Index, btc.Amount(u.Value), int64(tipHeight)-int64(u.AtHeight), u.ScriptPubkey)
 
 		addr, err := w.ScriptToAddress(u.ScriptPubkey)
