@@ -116,6 +116,7 @@ type Start struct {
 	Storage              string   `long:"storage" description:"set the outgoing message storage option [self-hosted, dropbox] default=self-hosted"`
 	BitcoinCash          bool     `long:"bitcoincash" description:"use a Bitcoin Cash wallet in a dedicated data directory"`
 	ZCash                string   `long:"zcash" description:"use a ZCash wallet in a dedicated data directory. To use this you must pass in the location of the zcashd binary."`
+	ZCashLight           bool     `long:"zcash-light" description:"use a ZCash light wallet in a dedicated data directory."`
 }
 
 func (x *Start) Execute(args []string) error {
@@ -133,7 +134,17 @@ func (x *Start) Execute(args []string) error {
 	if x.Testnet || x.Regtest {
 		isTestnet = true
 	}
-	if x.BitcoinCash && x.ZCash != "" {
+	enabledWallets := 0
+	if x.BitcoinCash {
+		enabledWallets++
+	}
+	if x.ZCash != "" {
+		enabledWallets++
+	}
+	if x.ZCashLight {
+		enabledWallets++
+	}
+	if enabledWallets > 1 {
 		return errors.New("Bitcoin Cash and ZCash cannot be used at the same time")
 	}
 
@@ -146,6 +157,8 @@ func (x *Start) Execute(args []string) error {
 		repoPath += "-bitcoincash"
 	} else if x.ZCash != "" {
 		repoPath += "-zcash"
+	} else if x.ZCashLight {
+		repoPath += "-zcash-light"
 	}
 	if x.DataDir != "" {
 		repoPath = x.DataDir
@@ -520,6 +533,8 @@ func (x *Start) Execute(args []string) error {
 	} else if x.ZCash != "" {
 		walletCfg.Type = "zcashd"
 		walletCfg.Binary = x.ZCash
+	} else if x.ZCashLight {
+		walletCfg.Type = "zcash-light"
 	}
 	var exchangeRates bitcoin.ExchangeRates
 	if !x.DisableExchangeRates {
@@ -650,21 +665,20 @@ func (x *Start) Execute(args []string) error {
 			exchangeRates = zcashd.NewZcashPriceFetcher(torDialer)
 		}
 		resyncManager = resync.NewResyncManager(sqliteDB.Sales(), cryptoWallet)
-	case "zcash-experimental":
-		walletTypeStr = "zcash experimental"
+	case "zcash-light":
+		walletTypeStr = "zcash light"
 		cryptoWallet, err = zcash.NewWallet(zcash.Config{
-			Mnemonic:    mn,
-			Params:      &params,
-			RepoPath:    repoPath,
-			TrustedPeer: walletCfg.TrustedPeer,
-			DB:          sqliteDB,
-			Proxy:       torDialer,
+			Mnemonic: mn,
+			Params:   &params,
+			RepoPath: repoPath,
+			DB:       sqliteDB,
+			Proxy:    torDialer,
 		})
 		if err != nil {
 			return err
 		}
 		if !x.DisableExchangeRates {
-			exchangeRates = zcashd.NewZcashPriceFetcher(torDialer)
+			exchangeRates = zcash.NewZcashPriceFetcher(torDialer)
 		}
 		resyncManager = resync.NewResyncManager(sqliteDB.Sales(), cryptoWallet)
 	default:
