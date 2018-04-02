@@ -104,6 +104,20 @@ func (i *InsightClient) doRequest(endpoint, method string, body io.Reader, query
 	return resp, nil
 }
 
+func (i *InsightClient) Status() (*Status, error) {
+	resp, err := i.doRequest("status", http.MethodGet, nil, nil)
+	if err != nil {
+		return nil, err
+	}
+	status := new(Status)
+	decoder := json.NewDecoder(resp.Body)
+	defer resp.Body.Close()
+	if err = decoder.Decode(status); err != nil {
+		return nil, fmt.Errorf("error decoding status: %s\n", err)
+	}
+	return status, nil
+}
+
 func (i *InsightClient) GetTransaction(txid string) (*Transaction, error) {
 	resp, err := i.doRequest("tx/"+txid, http.MethodGet, nil, nil)
 	if err != nil {

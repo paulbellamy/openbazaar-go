@@ -27,6 +27,10 @@ import (
 	"golang.org/x/net/proxy"
 )
 
+const (
+	OverwinterProtocolVersion = 170003
+)
+
 var log = logging.MustGetLogger("zcash")
 
 type Wallet struct {
@@ -100,12 +104,18 @@ func NewWallet(config Config) (*Wallet, error) {
 		return nil, fmt.Errorf("error initializing txstore: %v", err)
 	}
 
+	status, err := w.insight.Status()
+	if err != nil {
+		return nil, fmt.Errorf("error loading insight api status: %v", err)
+	}
+
 	w := &Wallet{
 		Config:            config,
 		keyManager:        keyManager,
 		masterPrivateKey:  mPrivKey,
 		masterPublicKey:   mPubKey,
 		insight:           insight,
+		isOverwinter:      status.Info.ProtoVersion >= OverwinterProtocolVersion,
 		txStore:           txStore,
 		initChan:          make(chan struct{}),
 		addrSubscriptions: make(map[btc.Address]struct{}),
