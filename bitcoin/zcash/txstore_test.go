@@ -26,11 +26,11 @@ func TestTxStoreIngestAddsTxnsToDB(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	txn := &wire.MsgTx{
+	txn := &Transaction{
 		Version: 1,
-		TxIn:    []*wire.TxIn{{}},
-		TxOut: []*wire.TxOut{
-			{Value: 123400000, PkScript: nil},
+		Inputs:  []Input{{}},
+		Outputs: []Output{
+			{Value: 123400000, ScriptPubKey: nil},
 		},
 	}
 	config.DB.Stxos().Put(wallet.Stxo{SpendTxid: txn.TxHash()})
@@ -60,10 +60,10 @@ func TestTxStoreIngestIgnoresDuplicates(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	txn := &wire.MsgTx{
+	txn := &Transaction{
 		Version: 1,
-		TxIn:    []*wire.TxIn{{}},
-		TxOut:   []*wire.TxOut{{}},
+		Inputs:  []Input{{}},
+		Outputs: []Output{{}},
 	}
 	config.DB.Stxos().Put(wallet.Stxo{SpendTxid: txn.TxHash()})
 	for i := 0; i < 2; i++ {
@@ -107,13 +107,13 @@ func TestTxStoreIngestIgnoresUnconfirmedDoubleSpends(t *testing.T) {
 	}
 
 	receivedTxid, _ := chainhash.NewHashFromStr("a")
-	existingTxn := &wire.MsgTx{
+	existingTxn := &Transaction{
 		Version: 1,
-		TxIn: []*wire.TxIn{
+		Inputs: []Input{
 			{PreviousOutPoint: wire.OutPoint{Hash: *receivedTxid, Index: 0}},
 		},
-		TxOut: []*wire.TxOut{
-			{Value: 123400000, PkScript: script},
+		Outputs: []Output{
+			{Value: 123400000, ScriptPubKey: script},
 		},
 	}
 	config.DB.Stxos().Put(wallet.Stxo{SpendTxid: existingTxn.TxHash()})
@@ -130,13 +130,13 @@ func TestTxStoreIngestIgnoresUnconfirmedDoubleSpends(t *testing.T) {
 		t.Errorf("Expected 1 txn, got: %d", len(txns))
 	}
 
-	txn := &wire.MsgTx{
+	txn := &Transaction{
 		Version: 1,
-		TxIn: []*wire.TxIn{
+		Inputs: []Input{
 			{PreviousOutPoint: wire.OutPoint{Hash: *receivedTxid, Index: 0}},
 		},
-		TxOut: []*wire.TxOut{
-			{Value: 123400000, PkScript: script},
+		Outputs: []Output{
+			{Value: 123400000, ScriptPubKey: script},
 		},
 	}
 	config.DB.Stxos().Put(wallet.Stxo{SpendTxid: txn.TxHash()})
@@ -182,18 +182,18 @@ func TestTxStoreIngestMarksExistingDoubleSpendsAsDead(t *testing.T) {
 
 	receivedTxid, _ := chainhash.NewHashFromStr("a")
 	// Eugh, we need 2 different types here (only one is serializable).
-	existingTxn := &wire.MsgTx{
+	existingTxn := &Transaction{
 		Version: 1,
-		TxIn: []*wire.TxIn{
+		Inputs: []Input{
 			{PreviousOutPoint: wire.OutPoint{Hash: *receivedTxid, Index: 0}},
 		},
-		TxOut: []*wire.TxOut{
-			{Value: 123400000, PkScript: script},
+		Outputs: []Output{
+			{Value: 123400000, ScriptPubKey: script},
 		},
-		LockTime: uint32(time.Now().Unix()),
+		Timestamp: time.Now().UTC(),
 	}
 	buf := &bytes.Buffer{}
-	if err := existingTxn.BtcEncode(buf, 0, wire.BaseEncoding); err != nil {
+	if _, err := existingTxn.WriteTo(buf); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := txStore.Ingest(existingTxn, buf.Bytes(), 1); err != nil {
@@ -209,14 +209,14 @@ func TestTxStoreIngestMarksExistingDoubleSpendsAsDead(t *testing.T) {
 		t.Errorf("Expected old utxo to have been added")
 	}
 
-	txn := &wire.MsgTx{
+	txn := &Transaction{
 		Version: 1,
-		TxIn: []*wire.TxIn{
+		Inputs: []Input{
 			{PreviousOutPoint: wire.OutPoint{Hash: *receivedTxid, Index: 0}},
 		},
-		TxOut: []*wire.TxOut{
+		Outputs: []Output{
 			// Doesn't matter as long as it is relevant
-			{Value: 123400000, PkScript: script},
+			{Value: 123400000, ScriptPubKey: script},
 		},
 	}
 	if _, err := txStore.Ingest(txn, nil, 9); err != nil {
@@ -247,23 +247,23 @@ func TestTxStoreIngestRejectsInvalidTxns(t *testing.T) {
 
 	for _, tc := range []struct {
 		err string
-		txn *wire.MsgTx
+		txn *Transaction
 	}{
 		{
 			err: "transaction version must be greater than 0",
-			txn: &wire.MsgTx{Version: 0, TxIn: []*wire.TxIn{{}}, TxOut: []*wire.TxOut{{}}},
+			txn: &Transaction{Version: 0, Inputs: []Input{{}}, Outputs: []Output{{}}},
 		},
 		{
 			err: "transaction version must be less than 3",
-			txn: &wire.MsgTx{Version: 3, TxIn: []*wire.TxIn{{}}, TxOut: []*wire.TxOut{{}}},
+			txn: &Transaction{Version: 3, Inputs: []Input{{}}, Outputs: []Output{{}}},
 		},
 		{
 			err: "transaction has no inputs",
-			txn: &wire.MsgTx{Version: 1, TxOut: []*wire.TxOut{{}}},
+			txn: &Transaction{Version: 1, Outputs: []Output{{}}},
 		},
 		{
 			err: "transaction has no outputs",
-			txn: &wire.MsgTx{Version: 1, TxIn: []*wire.TxIn{{}}},
+			txn: &Transaction{Version: 1, Inputs: []Input{{}}},
 		},
 		/*
 			{
@@ -323,13 +323,13 @@ func TestTxStoreIngestUpdatesUtxos(t *testing.T) {
 	config.DB.WatchedScripts().Put(script)
 	txStore.PopulateAdrs()
 
-	txn := &wire.MsgTx{
+	txn := &Transaction{
 		Version: 1,
-		TxIn: []*wire.TxIn{
+		Inputs: []Input{
 			{},
 		},
-		TxOut: []*wire.TxOut{
-			{Value: 123400000, PkScript: script},
+		Outputs: []Output{
+			{Value: 123400000, ScriptPubKey: script},
 		},
 	}
 	if _, err := txStore.Ingest(txn, nil, 1); err != nil {
@@ -369,11 +369,11 @@ func TestTxStoreIngestOnlyStoresRelevantTxns(t *testing.T) {
 	}
 	// Don't call PopulateAdrs here, so txstore doesn't know about this address
 
-	txn := &wire.MsgTx{
+	txn := &Transaction{
 		Version: 1,
-		TxIn:    []*wire.TxIn{{}},
-		TxOut: []*wire.TxOut{
-			{Value: 123400000, PkScript: script},
+		Inputs:  []Input{{}},
+		Outputs: []Output{
+			{Value: 123400000, ScriptPubKey: script},
 		},
 	}
 	if _, err := txStore.Ingest(txn, nil, 1); err != nil {
@@ -441,16 +441,16 @@ func TestTxStoreIngestAddsStxos(t *testing.T) {
 	// Don't call PopulateAdrs here, so txstore doesn't know about this address
 
 	// Ingest the initial stxo-containing txn
-	txn := &wire.MsgTx{
+	txn := &Transaction{
 		Version: 1,
-		TxIn: []*wire.TxIn{
+		Inputs: []Input{
 			{PreviousOutPoint: wire.OutPoint{Hash: *prevHash, Index: sequence}},
 		},
-		TxOut: []*wire.TxOut{
+		Outputs: []Output{
 			// Burn some money
-			{Value: 110000000, PkScript: burnScript},
+			{Value: 110000000, ScriptPubKey: burnScript},
 			// Return the change
-			{Value: 123450000 - 110000000, PkScript: outScript},
+			{Value: 123450000 - 110000000, ScriptPubKey: outScript},
 		},
 	}
 	if _, err := txStore.Ingest(txn, nil, 5); err != nil {
@@ -537,16 +537,16 @@ func TestTxStoreIngestUpdatesStxosHeight(t *testing.T) {
 	// Ingest the new stxo-containing txn
 	prevHash, _ := chainhash.NewHashFromStr("a")
 	sequence := uint32(898) // position in the block outputs
-	txn := &wire.MsgTx{
+	txn := &Transaction{
 		Version: 1,
-		TxIn: []*wire.TxIn{
+		Inputs: []Input{
 			{PreviousOutPoint: wire.OutPoint{Hash: *prevHash, Index: sequence}},
 		},
-		TxOut: []*wire.TxOut{
+		Outputs: []Output{
 			// Burn some money
-			{Value: 110000000, PkScript: burnScript},
+			{Value: 110000000, ScriptPubKey: burnScript},
 			// Return the change
-			{Value: 123450000 - 110000000, PkScript: outScript},
+			{Value: 123450000 - 110000000, ScriptPubKey: outScript},
 		},
 	}
 	existingStxo := wallet.Stxo{

@@ -3,13 +3,11 @@ package zcash
 import (
 	"bytes"
 	"errors"
-	"fmt"
 	"sync"
 	"time"
 
 	"github.com/OpenBazaar/multiwallet/keys"
 	"github.com/OpenBazaar/wallet-interface"
-	"github.com/btcsuite/btcd/blockchain"
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/txscript"
@@ -45,25 +43,12 @@ func NewTxStore(p *chaincfg.Params, db wallet.Datastore, km *keys.KeyManager) (*
 	return txs, nil
 }
 
-func validateTransaction(tx *wire.MsgTx) error {
-	if tx.Version <= 0 {
-		return fmt.Errorf("transaction version must be greater than 0")
-	}
-	if tx.Version >= 3 {
-		return fmt.Errorf("transaction version must be less than 3")
-	}
-	utilTx := btcutil.NewTx(tx) // convert for validation
-	// Checks basic stuff like there are inputs and ouputs
-	return blockchain.CheckTransactionSanity(utilTx)
-}
-
 // Ingest puts a tx into the DB atomically.  This can result in a
 // gain, a loss, or no result.  Gain or loss in satoshis is returned.
-func (ts *TxStore) Ingest(tx *wire.MsgTx, raw []byte, height int32) (uint32, error) {
+func (ts *TxStore) Ingest(tx *Transaction, raw []byte, height int32) (uint32, error) {
 	var hits uint32
 	var err error
-	err = validateTransaction(tx)
-	if err != nil {
+	if err := tx.Validate(); err != nil {
 		return hits, err
 	}
 
@@ -108,11 +93,11 @@ func (ts *TxStore) Ingest(tx *wire.MsgTx, raw []byte, height int32) (uint32, err
 	cb := wallet.TransactionCallback{Txid: cachedSha.CloneBytes(), Height: height}
 	value := int64(0)
 	matchesWatchOnly := false
-	for i, txout := range tx.TxOut {
-		out := wallet.TransactionOutput{ScriptPubKey: txout.PkScript, Value: txout.Value, Index: uint32(i)}
+	for i, txout := range tx.Outputs {
+		out := wallet.TransactionOutput{ScriptPubKey: txout.ScriptPubKey, Value: txout.Value, Index: uint32(i)}
 		for _, script := range PKscripts {
-			if bytes.Equal(txout.PkScript, script) { // new utxo found
-				scriptAddress, _ := ts.extractScriptAddress(txout.PkScript)
+			if bytes.Equal(txout.ScriptPubKey, script) { // new utxo found
+				scriptAddress, _ := ts.extractScriptAddress(txout.ScriptPubKey)
 				ts.keyManager.MarkKeyAsUsed(scriptAddress)
 				newop := wire.OutPoint{
 					Hash:  cachedSha,
@@ -121,7 +106,7 @@ func (ts *TxStore) Ingest(tx *wire.MsgTx, raw []byte, height int32) (uint32, err
 				newu := wallet.Utxo{
 					AtHeight:     height,
 					Value:        txout.Value,
-					ScriptPubkey: txout.PkScript,
+					ScriptPubkey: txout.ScriptPubKey,
 					Op:           newop,
 					WatchOnly:    false,
 				}
@@ -133,7 +118,7 @@ func (ts *TxStore) Ingest(tx *wire.MsgTx, raw []byte, height int32) (uint32, err
 		}
 		// Now check watched scripts
 		for _, script := range ts.watchedScripts {
-			if bytes.Equal(txout.PkScript, script) {
+			if bytes.Equal(txout.ScriptPubKey, script) {
 				newop := wire.OutPoint{
 					Hash:  cachedSha,
 					Index: uint32(i),
@@ -141,7 +126,7 @@ func (ts *TxStore) Ingest(tx *wire.MsgTx, raw []byte, height int32) (uint32, err
 				newu := wallet.Utxo{
 					AtHeight:     height,
 					Value:        txout.Value,
-					ScriptPubkey: txout.PkScript,
+					ScriptPubkey: txout.ScriptPubKey,
 					Op:           newop,
 					WatchOnly:    true,
 				}
@@ -155,7 +140,7 @@ func (ts *TxStore) Ingest(tx *wire.MsgTx, raw []byte, height int32) (uint32, err
 	if err != nil {
 		return 0, err
 	}
-	for _, txin := range tx.TxIn {
+	for _, txin := range tx.Inputs {
 		for i, u := range utxos {
 			if outPointsEqual(txin.PreviousOutPoint, u.Op) {
 				st := wallet.Stxo{
@@ -243,7 +228,7 @@ func (ts *TxStore) Ingest(tx *wire.MsgTx, raw []byte, height int32) (uint32, err
 // GetDoubleSpends takes a transaction and compares it with
 // all transactions in the db.  It returns a slice of all txids in the db
 // which are double spent by the received tx.
-func (ts *TxStore) CheckDoubleSpends(argTx *wire.MsgTx) ([]*chainhash.Hash, error) {
+func (ts *TxStore) CheckDoubleSpends(argTx *Transaction) ([]*chainhash.Hash, error) {
 	var dubs []*chainhash.Hash // slice of all double-spent txs
 	argTxid := argTx.TxHash()
 	txs, err := ts.db.Txns().GetAll(true)
@@ -255,12 +240,14 @@ func (ts *TxStore) CheckDoubleSpends(argTx *wire.MsgTx) ([]*chainhash.Hash, erro
 			continue
 		}
 		r := bytes.NewReader(compTx.Bytes)
-		msgTx := wire.NewMsgTx(1)
-		msgTx.BtcDecode(r, 1, wire.WitnessEncoding)
+		var msgTx Transaction
+		if _, err := msgTx.ReadFrom(r); err != nil {
+			return nil, err
+		}
 		compTxid := msgTx.TxHash()
-		for _, argIn := range argTx.TxIn {
+		for _, argIn := range argTx.Inputs {
 			// iterate through inputs of compTx
-			for _, compIn := range msgTx.TxIn {
+			for _, compIn := range msgTx.Inputs {
 				if outPointsEqual(argIn.PreviousOutPoint, compIn.PreviousOutPoint) && !compTxid.IsEqual(&argTxid) {
 					// found double spend
 					dubs = append(dubs, &compTxid)

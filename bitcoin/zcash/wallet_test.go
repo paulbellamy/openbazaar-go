@@ -608,30 +608,30 @@ func TestWalletSpend(t *testing.T) {
 	}
 
 	// Check the sent txn is valid
-	var txn wire.MsgTx
-	if err := txn.BtcDecode(bytes.NewReader(sentTx), 0, wire.BaseEncoding); err != nil {
+	var txn Transaction
+	if _, err := txn.ReadFrom(bytes.NewReader(sentTx)); err != nil {
 		t.Fatal(err)
 	}
 	// Check there are inputs
-	if len(txn.TxIn) != 1 {
-		t.Errorf("Expected 1 inputs, got: %d", len(txn.TxIn))
+	if len(txn.Inputs) != 1 {
+		t.Errorf("Expected 1 inputs, got: %d", len(txn.Inputs))
 	} else {
 		// Check the input is the expected utxo
-		if !txn.TxIn[0].PreviousOutPoint.Hash.IsEqual(&utxo1.Op.Hash) {
-			t.Errorf("Expected input txid %q, got input txid: %q", utxo1.Op.Hash.String(), txn.TxIn[0].PreviousOutPoint.Hash.String())
+		if !txn.Inputs[0].PreviousOutPoint.Hash.IsEqual(&utxo1.Op.Hash) {
+			t.Errorf("Expected input txid %q, got input txid: %q", utxo1.Op.Hash.String(), txn.Inputs[0].PreviousOutPoint.Hash.String())
 		}
-		if txn.TxIn[0].PreviousOutPoint.Index != utxo1.Op.Index {
-			t.Errorf("Expected input vout %d, got input vout: %d", utxo1.Op.Index, txn.TxIn[0].PreviousOutPoint.Index)
+		if txn.Inputs[0].PreviousOutPoint.Index != utxo1.Op.Index {
+			t.Errorf("Expected input vout %d, got input vout: %d", utxo1.Op.Index, txn.Inputs[0].PreviousOutPoint.Index)
 		}
 	}
 
-	if len(txn.TxOut) != 2 {
-		t.Errorf("Expected 2 outputs, got: %d", len(txn.TxOut))
+	if len(txn.Outputs) != 2 {
+		t.Errorf("Expected 2 outputs, got: %d", len(txn.Outputs))
 	} else {
 		// Check main output
 		{
 			// Check the target is the expected address
-			addr, err := w.ScriptToAddress(txn.TxOut[0].PkScript)
+			addr, err := w.ScriptToAddress(txn.Outputs[0].ScriptPubKey)
 			if err != nil {
 				t.Errorf("error converting output script to address: %v", err)
 			} else if fmt.Sprint(addr) != fmt.Sprint(address) {
@@ -639,7 +639,7 @@ func TestWalletSpend(t *testing.T) {
 			}
 
 			// Check the sum of the output values
-			value := txn.TxOut[0].Value
+			value := txn.Outputs[0].Value
 			if value != expectedAmount {
 				t.Errorf("Expected amount %d, got outputs: %d", expectedAmount, value)
 			}
@@ -651,7 +651,7 @@ func TestWalletSpend(t *testing.T) {
 					t.Fatal(err)
 				}
 				txCopy := txn.shallowCopy()
-				for i := range txCopy.TxIn {
+				for i := range txCopy.Inputs {
 					// Eugh, because we replace the ScriptSig from the script to the
 					// signature, we need an unsigned copy of the txn to verify it. This
 					// feels really wrong and needs a refactor... :/
@@ -659,9 +659,9 @@ func TestWalletSpend(t *testing.T) {
 					if err != nil {
 						t.Fatal(err)
 					}
-					txCopy.TxIn[i].ScriptSig.Hex = hex.EncodeToString(unsignedScript)
+					txCopy.Inputs[i].ScriptSig.Hex = hex.EncodeToString(unsignedScript)
 				}
-				if err := verifySignature(txCopy, signingKey, 0, txn.TxIn[0].ScriptSig.Hex); err != nil {
+				if err := verifySignature(txCopy, signingKey, 0, txn.Inputs[0].ScriptSig.Hex); err != nil {
 					t.Error(err)
 				}
 			*/
@@ -670,7 +670,7 @@ func TestWalletSpend(t *testing.T) {
 		// Check the change output
 		{
 			// Check the target is our own
-			addr, err := w.ScriptToAddress(txn.TxOut[1].PkScript)
+			addr, err := w.ScriptToAddress(txn.Outputs[1].ScriptPubKey)
 			if err != nil {
 				t.Errorf("error converting output script to address: %v", err)
 			} else if fmt.Sprint(addr) != fmt.Sprint(w.CurrentAddress(wallet.INTERNAL)) {
@@ -678,7 +678,7 @@ func TestWalletSpend(t *testing.T) {
 			}
 
 			// Check the sum of the output values is our expected amount
-			value := txn.TxOut[1].Value
+			value := txn.Outputs[1].Value
 			if value != expectedChange {
 				t.Errorf("Expected change %d, got change: %d", expectedChange, value)
 			}

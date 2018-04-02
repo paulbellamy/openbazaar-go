@@ -153,11 +153,11 @@ func (w *Wallet) onTxn(txn client.Transaction) error {
 	if err != nil {
 		return err
 	}
-	msgTx := &wire.MsgTx{
-		Version:  int32(txn.Version),
-		TxIn:     make([]*wire.TxIn, len(txn.Inputs)),
-		TxOut:    make([]*wire.TxOut, len(txn.Outputs)),
-		LockTime: uint32(txn.Time),
+	msgTx := &Transaction{
+		Version:   uint32(txn.Version),
+		Inputs:    make([]Input, len(txn.Inputs)),
+		Outputs:   make([]Output, len(txn.Outputs)),
+		Timestamp: time.Unix(txn.Time, 0),
 	}
 	for i, input := range txn.Inputs {
 		hash, err := chainhash.NewHashFromStr(input.Txid)
@@ -168,13 +168,13 @@ func (w *Wallet) onTxn(txn client.Transaction) error {
 		if err != nil {
 			return err
 		}
-		msgTx.TxIn[i] = &wire.TxIn{
+		msgTx.Inputs[i] = Input{
 			PreviousOutPoint: wire.OutPoint{
 				Hash:  *hash,
 				Index: uint32(input.Vout),
 			},
 			SignatureScript: sigScript,
-			Sequence:        uint32(input.Sequence), // TODO: Is this sequence right?
+			Sequence:        uint32(input.Sequence),
 		}
 	}
 	for i, output := range txn.Outputs {
@@ -186,9 +186,9 @@ func (w *Wallet) onTxn(txn client.Transaction) error {
 		if err != nil {
 			return err
 		}
-		msgTx.TxOut[i] = &wire.TxOut{
-			Value:    value,
-			PkScript: pkScript,
+		msgTx.Outputs[i] = Output{
+			Value:        value,
+			ScriptPubKey: pkScript,
 		}
 	}
 	_, err = w.txStore.Ingest(msgTx, raw, int32(txn.BlockHeight))
