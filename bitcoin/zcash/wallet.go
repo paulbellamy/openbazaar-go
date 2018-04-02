@@ -40,6 +40,7 @@ type Wallet struct {
 	masterPublicKey        *hd.ExtendedKey
 	listeners              []func(wallet.TransactionCallback)
 	insight                InsightClient
+	isOverwinter           bool
 	txStore                *TxStore
 	initChan               chan struct{}
 	addrSubscriptions      map[btc.Address]struct{}
@@ -72,6 +73,7 @@ var (
 )
 
 type InsightClient interface {
+	Status() (*client.Status, error)
 	GetLatestBlock() (*client.Block, error)
 	GetBlocksBefore(time.Time, int) (*client.BlockList, error)
 	GetTransactions(addrs []btc.Address) ([]client.Transaction, error)
@@ -104,22 +106,22 @@ func NewWallet(config Config) (*Wallet, error) {
 		return nil, fmt.Errorf("error initializing txstore: %v", err)
 	}
 
-	status, err := w.insight.Status()
-	if err != nil {
-		return nil, fmt.Errorf("error loading insight api status: %v", err)
-	}
-
 	w := &Wallet{
 		Config:            config,
 		keyManager:        keyManager,
 		masterPrivateKey:  mPrivKey,
 		masterPublicKey:   mPubKey,
 		insight:           insight,
-		isOverwinter:      status.Info.ProtoVersion >= OverwinterProtocolVersion,
 		txStore:           txStore,
 		initChan:          make(chan struct{}),
 		addrSubscriptions: make(map[btc.Address]struct{}),
 	}
+
+	status, err := w.insight.Status()
+	if err != nil {
+		return nil, fmt.Errorf("error loading insight api status: %v", err)
+	}
+	w.isOverwinter = status.Info.ProtocolVersion >= OverwinterProtocolVersion
 
 	return w, nil
 }

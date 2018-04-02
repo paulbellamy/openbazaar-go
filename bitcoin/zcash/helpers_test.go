@@ -381,6 +381,7 @@ func (f *FakeWatchedScripts) Delete(scriptPubKey []byte) error {
 }
 
 type FakeInsightClient struct {
+	status            func() (*client.Status, error)
 	getLatestBlock    func() (*client.Block, error)
 	getBlocksBefore   func(time.Time, int) (*client.BlockList, error)
 	getTransactions   func(addrs []btcutil.Address) ([]client.Transaction, error)
@@ -390,6 +391,17 @@ type FakeInsightClient struct {
 	estimateFee       func(nbBlocks int) (int, error)
 	listenAddress     func(addr btcutil.Address)
 	close             func()
+}
+
+func (f *FakeInsightClient) Status() (*client.Status, error) {
+	if f.status == nil {
+		return &client.Status{
+			Info: client.Info{
+				ProtocolVersion: OverwinterProtocolVersion - 1,
+			},
+		}, nil
+	}
+	return f.status()
 }
 
 func (f *FakeInsightClient) GetLatestBlock() (*client.Block, error) {
