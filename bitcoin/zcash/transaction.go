@@ -244,7 +244,7 @@ func (t *Transaction) readJoinSplits(r io.Reader) error {
 }
 
 func (t *Transaction) readJoinSplitPubKey(r io.Reader) error {
-	if t.Version <= 1 {
+	if t.Version <= 1 || len(t.JoinSplits) <= 0 {
 		return nil
 	}
 	_, err := io.ReadFull(r, t.JoinSplitPubKey[:])
@@ -252,7 +252,7 @@ func (t *Transaction) readJoinSplitPubKey(r io.Reader) error {
 }
 
 func (t *Transaction) readJoinSplitSignature(r io.Reader) error {
-	if t.Version <= 1 {
+	if t.Version <= 1 || len(t.JoinSplits) <= 0 {
 		return nil
 	}
 	_, err := io.ReadFull(r, t.JoinSplitSignature[:])
@@ -276,9 +276,9 @@ func (t *Transaction) WriteTo(w io.Writer) (n int64, err error) {
 		t.writeOutputs,
 		writeField(uint32(t.Timestamp.Unix())),
 		writeIf(t.IsOverwinter, writeField(t.ExpiryHeight)),
-		t.writeJoinSplits,
-		writeIf(t.Version >= 2, writeBytes(t.JoinSplitPubKey[:])),
-		writeIf(t.Version >= 2, writeBytes(t.JoinSplitSignature[:])),
+		writeIf(t.Version >= 2, t.writeJoinSplits),
+		writeIf(t.Version >= 2 && len(t.JoinSplits) > 0, writeBytes(t.JoinSplitPubKey[:])),
+		writeIf(t.Version >= 2 && len(t.JoinSplits) > 0, writeBytes(t.JoinSplitSignature[:])),
 	} {
 		if err := segment(counter); err != nil {
 			return counter.N, err
@@ -322,9 +322,6 @@ func (t *Transaction) writeOutputs(w io.Writer) error {
 }
 
 func (t *Transaction) writeJoinSplits(w io.Writer) error {
-	if t.Version <= 1 {
-		return nil
-	}
 	if err := wire.WriteVarInt(w, 0, uint64(len(t.JoinSplits))); err != nil {
 		return err
 	}
@@ -510,11 +507,9 @@ func (i *Input) ReadFrom(r io.Reader) (int64, error) {
 	if err != nil {
 		return counter.N, err
 	}
-	var sequence uint32
-	if err := binary.Read(counter, binary.LittleEndian, &sequence); err != nil {
+	if err := binary.Read(counter, binary.LittleEndian, &i.Sequence); err != nil {
 		return counter.N, err
 	}
-	i.Sequence = sequence
 	return counter.N, nil
 }
 
@@ -523,12 +518,9 @@ func (i *Input) readOutPoint(r io.Reader) error {
 	if _, err := io.ReadFull(r, i.PreviousOutPoint.Hash[:]); err != nil {
 		return err
 	}
-
-	var index uint32
-	if err := binary.Read(r, binary.LittleEndian, &index); err != nil {
+	if err := binary.Read(r, binary.LittleEndian, &i.PreviousOutPoint.Index); err != nil {
 		return err
 	}
-	i.PreviousOutPoint.Index = index
 	return nil
 }
 
@@ -657,15 +649,15 @@ type JoinSplit struct {
 func (js *JoinSplit) ReadFrom(r io.Reader) (int64, error) {
 	counter := &countingReader{Reader: r}
 	for _, segment := range []func(io.Reader) error{
-		js.readVPubOld,
-		js.readVPubNew,
-		js.readAnchor,
-		js.readNullifiers,
-		js.readCommitments,
-		js.readEphemeralKey,
-		js.readRandomSeed,
-		js.readMacs,
-		js.readProof,
+		readField(&js.VPubOld),
+		readField(&js.VPubNew),
+		readBytes(js.Anchor[:]),
+		readByteArray32(js.Nullifiers[:]),
+		readByteArray32(js.Commitments[:]),
+		readBytes(js.EphemeralKey[:]),
+		readBytes(js.RandomSeed[:]),
+		readByteArray32(js.Macs[:]),
+		readBytes(js.Proof[:]),
 		js.readCiphertexts,
 	} {
 		if err := segment(counter); err != nil {
@@ -675,61 +667,8 @@ func (js *JoinSplit) ReadFrom(r io.Reader) (int64, error) {
 	return counter.N, nil
 }
 
-func (js *JoinSplit) readVPubOld(r io.Reader) error {
-	return binary.Read(r, binary.LittleEndian, &js.VPubOld)
-}
-
-func (js *JoinSplit) readVPubNew(r io.Reader) error {
-	return binary.Read(r, binary.LittleEndian, &js.VPubNew)
-}
-
-func (js *JoinSplit) readAnchor(r io.Reader) error {
-	_, err := io.ReadFull(r, js.Anchor[:])
-	return err
-}
-
-func (js *JoinSplit) readNullifiers(r io.Reader) error {
-	for _, x := range js.Nullifiers {
-		if _, err := io.ReadFull(r, x[:]); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (js *JoinSplit) readCommitments(r io.Reader) error {
-	for _, x := range js.Commitments {
-		if _, err := io.ReadFull(r, x[:]); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (js *JoinSplit) readEphemeralKey(r io.Reader) error {
-	_, err := io.ReadFull(r, js.Anchor[:])
-	return err
-}
-
-func (js *JoinSplit) readRandomSeed(r io.Reader) error {
-	_, err := io.ReadFull(r, js.Anchor[:])
-	return err
-}
-
-func (js *JoinSplit) readMacs(r io.Reader) error {
-	for _, x := range js.Macs {
-		if _, err := io.ReadFull(r, x[:]); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (js *JoinSplit) readProof(r io.Reader) error {
-	_, err := io.ReadFull(r, js.Anchor[:])
-	return err
-}
-
+// readCiphertexts is needed because ciphertexts is an odd size (not 32 bytes).
+// We could probably eliminate this with some type inference magic, but...
 func (js *JoinSplit) readCiphertexts(r io.Reader) error {
 	for _, x := range js.Ciphertexts {
 		if _, err := io.ReadFull(r, x[:]); err != nil {
@@ -737,6 +676,28 @@ func (js *JoinSplit) readCiphertexts(r io.Reader) error {
 		}
 	}
 	return nil
+}
+
+func readField(v interface{}) func(r io.Reader) error {
+	return func(r io.Reader) error { return binary.Read(r, binary.LittleEndian, v) }
+}
+
+func readBytes(b []byte) func(r io.Reader) error {
+	return func(r io.Reader) error {
+		_, err := io.ReadFull(r, b)
+		return err
+	}
+}
+
+func readByteArray32(a [][32]byte) func(r io.Reader) error {
+	return func(r io.Reader) error {
+		for _, x := range a {
+			if _, err := io.ReadFull(r, x[:]); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 }
 
 func (js *JoinSplit) WriteTo(w io.Writer) (n int64, err error) {
@@ -792,11 +753,12 @@ func writeBytes(v []byte) func(w io.Writer) error {
 	}
 }
 
-func writeByteArray32(v [][32]byte) func(w io.Writer) error {
+func writeByteArray32(a [][32]byte) func(w io.Writer) error {
 	return func(w io.Writer) error {
-		for _, x := range v {
-			_, err := w.Write(x[:])
-			return err
+		for _, x := range a {
+			if _, err := w.Write(x[:]); err != nil {
+				return err
+			}
 		}
 		return nil
 	}

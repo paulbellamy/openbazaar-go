@@ -10,16 +10,34 @@ import (
 	"github.com/btcsuite/btcd/wire"
 )
 
+func byteSlice32(t *testing.T) (b [32]byte) {
+	if _, err := rand.Read(b[:]); err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+func byteSlice64(t *testing.T) (b [64]byte) {
+	if _, err := rand.Read(b[:]); err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
 func TestSerialization(t *testing.T) {
 	now := time.Now().UTC().Truncate(1 * time.Second)
 	hash, _ := chainhash.NewHashFromStr("a")
-	var jsPubKey [32]byte
-	if _, err := rand.Read(jsPubKey[:]); err != nil {
+
+	var randomProof [296]byte
+	if _, err := rand.Read(randomProof[:]); err != nil {
 		t.Fatal(err)
 	}
-	var jsSignature [64]byte
-	if _, err := rand.Read(jsSignature[:]); err != nil {
-		t.Fatal(err)
+
+	var randomCiphertexts [2][601]byte
+	for _, b := range randomCiphertexts {
+		if _, err := rand.Read(b[:]); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	for _, tc := range []struct {
@@ -51,13 +69,26 @@ func TestSerialization(t *testing.T) {
 		{
 			name: "v2",
 			txn: Transaction{
-				Version:            2,
-				Timestamp:          now,
-				Inputs:             []Input{},
-				Outputs:            []Output{},
-				JoinSplits:         []JoinSplit{{}},
-				JoinSplitPubKey:    jsPubKey,
-				JoinSplitSignature: jsSignature,
+				Version:   2,
+				Timestamp: now,
+				Inputs:    []Input{},
+				Outputs:   []Output{},
+				JoinSplits: []JoinSplit{
+					{
+						VPubOld:      1234,
+						VPubNew:      5678,
+						Anchor:       byteSlice32(t),
+						Nullifiers:   [2][32]byte{byteSlice32(t), byteSlice32(t)},
+						Commitments:  [2][32]byte{byteSlice32(t), byteSlice32(t)},
+						EphemeralKey: byteSlice32(t),
+						RandomSeed:   byteSlice32(t),
+						Macs:         [2][32]byte{byteSlice32(t), byteSlice32(t)},
+						Proof:        randomProof,
+						Ciphertexts:  randomCiphertexts,
+					},
+				},
+				JoinSplitPubKey:    byteSlice32(t),
+				JoinSplitSignature: byteSlice64(t),
 			},
 		},
 		{
@@ -96,11 +127,12 @@ func TestSerialization(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			b, err := tc.txn.MarshalBinary()
 			if err != nil {
-				t.Fatal(err)
+				t.Fatalf("error encoding transaction: %v", err)
 			}
+
 			var got Transaction
 			if err := got.UnmarshalBinary(b); err != nil {
-				t.Fatal(err)
+				t.Fatalf("error decoding transaction: %v", err)
 			}
 			if !got.IsEqual(&tc.txn) {
 				t.Fatalf("\nExpected: %+v\n     Got: %+v", tc.txn, got)
