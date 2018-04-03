@@ -245,47 +245,12 @@ func TestTxStoreIngestRejectsInvalidTxns(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for _, tc := range []struct {
-		err string
-		txn *Transaction
-	}{
-		{
-			err: "transaction version must be greater than 0",
-			txn: &Transaction{Version: 0, Inputs: []Input{{}}, Outputs: []Output{{}}},
-		},
-		{
-			err: "transaction version must be less than 3",
-			txn: &Transaction{Version: 3, Inputs: []Input{{}}, Outputs: []Output{{}}},
-		},
-		{
-			err: "transaction has no inputs",
-			txn: &Transaction{Version: 1, Outputs: []Output{{}}},
-		},
-		{
-			err: "transaction has no outputs",
-			txn: &Transaction{Version: 1, Inputs: []Input{{}}},
-		},
-		/*
-			{
-				err: "transaction with one or more coinbase inputs must have no transparent outputs",
-				txn: client.Transaction{
-					Version: 1,
-					Inputs:  []client.Input{{IsCoinbase: true}},
-					Outputs: []client.Output{{}},
-				},
-			},
-		*/
-		// TODO: nJoinSplit handling
-		// TODO: Other rules inherited from Bitcoin
-	} {
-		t.Run(tc.err, func(t *testing.T) {
-			_, err := txStore.Ingest(tc.txn, nil, 1)
-			if err == nil {
-				t.Errorf("Did not reject invalid txn")
-			} else if err.Error() != tc.err {
-				t.Errorf("Expected %q error, got: %q", tc.err, err.Error())
-			}
-		})
+	expectedErr := "transaction version must be greater than 0"
+	txn := &Transaction{Version: 0, Inputs: []Input{{}}, Outputs: []Output{{}}}
+	if _, err := txStore.Ingest(txn, nil, 1); err == nil {
+		t.Errorf("Did not reject invalid txn")
+	} else if err.Error() != expectedErr {
+		t.Errorf("Expected %q error, got: %q", expectedErr, err.Error())
 	}
 }
 

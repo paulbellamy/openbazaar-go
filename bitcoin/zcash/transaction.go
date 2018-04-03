@@ -15,21 +15,39 @@ import (
 )
 
 var (
-	ErrTxVersionTooSmall = fmt.Errorf("transaction version must be greater than 0")
-	ErrTxVersionTooLarge = fmt.Errorf("transaction version must be less than 3")
-	ErrNoTxInputs        = fmt.Errorf("transaction has no inputs")
-	ErrNoTxOutputs       = fmt.Errorf("transaction has no outputs")
-	ErrDuplicateTxInputs = fmt.Errorf("transaction contains duplicate inputs")
-	ErrBadTxInput        = fmt.Errorf("transaction input refers to previous output that is null")
+	ErrOverwinterTxVersionInvalid             = fmt.Errorf("overwinter transaction version must be 3")
+	ErrOverwinterTxUnknownVersionGroupID      = fmt.Errorf("transaction has unknown version group id")
+	ErrTxVersionTooSmall                      = fmt.Errorf("transaction version must be greater than 0")
+	ErrTxVersionTooLarge                      = fmt.Errorf("transaction version must be less than 3")
+	ErrNoTxInputs                             = fmt.Errorf("transaction has no inputs")
+	ErrNoTxOutputs                            = fmt.Errorf("transaction has no outputs")
+	ErrDuplicateTxInputs                      = fmt.Errorf("transaction contains duplicate inputs")
+	ErrBadTxInput                             = fmt.Errorf("transaction input refers to previous output that is null")
+	ErrCoinBaseTxMustHaveNoTransparentOutputs = fmt.Errorf("transaction with coinbase input must have no transparent outputs")
 
 	zeroHash chainhash.Hash
 )
 
+const (
+	NumJoinSplitInputs  = 2
+	NumJoinSplitOutputs = 2
+
+	OverwinterFlagMask       uint32 = 0x80000000
+	OverwinterVersionMask           = 0x7FFFFFFF
+	OverwinterVersionGroupID        = 0x03C48270
+)
+
 type Transaction struct {
-	Version   uint32
-	Inputs    []Input
-	Outputs   []Output
-	Timestamp time.Time
+	IsOverwinter       bool
+	Version            uint32
+	VersionGroupID     uint32
+	Inputs             []Input
+	Outputs            []Output
+	Timestamp          time.Time
+	ExpiryHeight       uint32
+	JoinSplits         []JoinSplit
+	JoinSplitPubKey    [32]byte
+	JoinSplitSignature [64]byte
 }
 
 // TxHash generates the Hash for the transaction.
@@ -42,6 +60,40 @@ func (t *Transaction) TxHash() chainhash.Hash {
 	return chainhash.DoubleHashH(b)
 }
 
+func (t *Transaction) IsEqual(other *Transaction) bool {
+	switch {
+	case t == nil && other == nil:
+		return true
+	case t == nil || other == nil:
+		return false
+	case t.IsOverwinter != other.IsOverwinter:
+		return false
+	case t.Version != other.Version:
+		return false
+	case t.VersionGroupID != other.VersionGroupID:
+		return false
+	case t.Timestamp != other.Timestamp:
+		return false
+	case t.ExpiryHeight != other.ExpiryHeight:
+		return false
+	case len(t.Inputs) != len(other.Inputs):
+		return false
+	case len(t.Outputs) != len(other.Outputs):
+		return false
+	}
+	for i := range t.Inputs {
+		if !t.Inputs[i].IsEqual(other.Inputs[i]) {
+			return false
+		}
+	}
+	for i := range t.Outputs {
+		if !t.Outputs[i].IsEqual(other.Outputs[i]) {
+			return false
+		}
+	}
+	return true
+}
+
 func (t *Transaction) UnmarshalBinary(data []byte) error {
 	_, err := t.ReadFrom(bytes.NewReader(data))
 	return err
@@ -51,10 +103,14 @@ func (t *Transaction) ReadFrom(r io.Reader) (n int64, err error) {
 	counter := &countingReader{Reader: r}
 	for _, segment := range []func(io.Reader) error{
 		t.readVersion,
+		t.readVersionGroupID,
 		t.readInputs,
 		t.readOutputs,
 		t.readTimestamp,
-		// TODO: read joinsplits
+		t.readExpiryHeight,
+		t.readJoinSplits,
+		t.readJoinSplitPubKey,
+		t.readJoinSplitSignature,
 	} {
 		if err := segment(counter); err != nil {
 			return counter.N, err
@@ -67,10 +123,26 @@ func (t *Transaction) readVersion(r io.Reader) error {
 	// TODO: Handle overwinter here
 	// Check the version
 	err := binary.Read(r, binary.LittleEndian, &t.Version)
-	if err == nil && t.Version < 1 || 2 < t.Version {
+	if err != nil {
+		return err
+	}
+	t.IsOverwinter = (t.Version & OverwinterFlagMask) > 0
+	if t.IsOverwinter {
+		t.Version = t.Version & OverwinterVersionMask
+		if t.Version != 3 {
+			return fmt.Errorf("invalid txn version %v", t.Version)
+		}
+	} else if t.Version < 1 || 2 < t.Version {
 		return fmt.Errorf("invalid txn version %v", t.Version)
 	}
 	return err
+}
+
+func (t *Transaction) readVersionGroupID(r io.Reader) error {
+	if !t.IsOverwinter {
+		return nil
+	}
+	return binary.Read(r, binary.LittleEndian, &t.VersionGroupID)
 }
 
 func (t *Transaction) readInputs(r io.Reader) error {
@@ -137,17 +209,54 @@ func readScript(r io.Reader, fieldName string) ([]byte, error) {
 	return b, nil
 }
 
-func writeScript(w io.Writer, script []byte) error {
-	return wire.WriteVarBytes(w, 0, script)
-}
-
 func (t *Transaction) readTimestamp(r io.Reader) error {
 	var timestamp uint32
 	if err := binary.Read(r, binary.LittleEndian, &timestamp); err != nil {
 		return err
 	}
-	t.Timestamp = time.Unix(int64(timestamp), 0)
+	t.Timestamp = time.Unix(int64(timestamp), 0).UTC()
 	return nil
+}
+
+func (t *Transaction) readExpiryHeight(r io.Reader) error {
+	if !t.IsOverwinter {
+		return nil
+	}
+	return binary.Read(r, binary.LittleEndian, &t.ExpiryHeight)
+}
+
+func (t *Transaction) readJoinSplits(r io.Reader) error {
+	if t.Version <= 1 {
+		return nil
+	}
+	count, err := wire.ReadVarInt(r, 0)
+	if err != nil {
+		return err
+	}
+	for i := uint64(0); i < count; i++ {
+		var js JoinSplit
+		if _, err := js.ReadFrom(r); err != nil {
+			return err
+		}
+		t.JoinSplits = append(t.JoinSplits, js)
+	}
+	return nil
+}
+
+func (t *Transaction) readJoinSplitPubKey(r io.Reader) error {
+	if t.Version <= 1 {
+		return nil
+	}
+	_, err := io.ReadFull(r, t.JoinSplitPubKey[:])
+	return err
+}
+
+func (t *Transaction) readJoinSplitSignature(r io.Reader) error {
+	if t.Version <= 1 {
+		return nil
+	}
+	_, err := io.ReadFull(r, t.JoinSplitSignature[:])
+	return err
 }
 
 func (t *Transaction) MarshalBinary() ([]byte, error) {
@@ -156,16 +265,20 @@ func (t *Transaction) MarshalBinary() ([]byte, error) {
 		return nil, err
 	}
 	return buf.Bytes(), nil
-	return buf.Bytes(), nil
 }
 
 func (t *Transaction) WriteTo(w io.Writer) (n int64, err error) {
 	counter := &countingWriter{Writer: w}
 	for _, segment := range []func(io.Writer) error{
 		t.writeVersion,
+		t.writeVersionGroupID,
 		t.writeInputs,
 		t.writeOutputs,
 		t.writeTimestamp,
+		t.writeExpiryHeight,
+		t.writeJoinSplits,
+		t.writeJoinSplitPubKey,
+		t.writeJoinSplitSignature,
 	} {
 		if err := segment(counter); err != nil {
 			return counter.N, err
@@ -177,7 +290,18 @@ func (t *Transaction) WriteTo(w io.Writer) (n int64, err error) {
 func (t *Transaction) writeVersion(w io.Writer) error {
 	// TODO: Handle joinsplits here
 	// TODO: Handle overwinter here
-	return binary.Write(w, binary.LittleEndian, uint32(1))
+	var version uint32 = t.Version
+	if t.IsOverwinter {
+		version |= OverwinterFlagMask
+	}
+	return binary.Write(w, binary.LittleEndian, version)
+}
+
+func (t *Transaction) writeVersionGroupID(w io.Writer) error {
+	if !t.IsOverwinter {
+		return nil
+	}
+	return binary.Write(w, binary.LittleEndian, uint32(t.VersionGroupID))
 }
 
 func (t *Transaction) writeInputs(w io.Writer) error {
@@ -208,12 +332,54 @@ func (t *Transaction) writeTimestamp(w io.Writer) error {
 	return binary.Write(w, binary.LittleEndian, uint32(t.Timestamp.Unix()))
 }
 
-func (tx *Transaction) Validate() error {
-	if tx.Version <= 0 {
-		return ErrTxVersionTooSmall
+func (t *Transaction) writeExpiryHeight(w io.Writer) error {
+	if !t.IsOverwinter {
+		return nil
 	}
-	if tx.Version >= 3 {
+	return binary.Write(w, binary.LittleEndian, uint32(t.ExpiryHeight))
+}
+
+func (t *Transaction) writeJoinSplits(w io.Writer) error {
+	if t.Version <= 1 {
+		return nil
+	}
+	if err := wire.WriteVarInt(w, 0, uint64(len(t.JoinSplits))); err != nil {
+		return err
+	}
+	for _, js := range t.JoinSplits {
+		if _, err := js.WriteTo(w); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (t *Transaction) writeJoinSplitPubKey(w io.Writer) error {
+	if t.Version <= 1 {
+		return nil
+	}
+	_, err := w.Write(t.JoinSplitPubKey[:])
+	return err
+}
+
+func (t *Transaction) writeJoinSplitSignature(w io.Writer) error {
+	if t.Version <= 1 {
+		return nil
+	}
+	_, err := w.Write(t.JoinSplitSignature[:])
+	return err
+}
+
+func (tx *Transaction) Validate() error {
+	if tx.IsOverwinter && tx.Version != 3 {
+		return ErrOverwinterTxVersionInvalid
+	} else if !tx.IsOverwinter && tx.Version <= 0 {
+		return ErrTxVersionTooSmall
+	} else if !tx.IsOverwinter && tx.Version >= 3 {
 		return ErrTxVersionTooLarge
+	}
+	if tx.IsOverwinter && tx.VersionGroupID != OverwinterVersionGroupID {
+		return ErrOverwinterTxUnknownVersionGroupID
 	}
 	// A transaction must have at least one input.
 	if len(tx.Inputs) == 0 {
@@ -279,6 +445,9 @@ func (tx *Transaction) Validate() error {
 		slen := len(tx.Inputs[0].SignatureScript)
 		if slen < blockchain.MinCoinbaseScriptLen || slen > blockchain.MaxCoinbaseScriptLen {
 			return fmt.Errorf("coinbase transaction script length of %d is out of range (min: %d, max: %d)", slen, blockchain.MinCoinbaseScriptLen, blockchain.MaxCoinbaseScriptLen)
+		}
+		if len(tx.Outputs) > 0 {
+			return ErrCoinBaseTxMustHaveNoTransparentOutputs
 		}
 	} else {
 		// Previous transaction outputs referenced by the inputs to this
@@ -352,6 +521,19 @@ type Input struct {
 	Sequence         uint32
 }
 
+func (i Input) IsEqual(other Input) bool {
+	if !outpointsEqual(i.PreviousOutPoint, other.PreviousOutPoint) {
+		return false
+	}
+	if string(i.SignatureScript) != string(other.SignatureScript) {
+		return false
+	}
+	if i.Sequence != other.Sequence {
+		return false
+	}
+	return true
+}
+
 func (i *Input) ReadFrom(r io.Reader) (int64, error) {
 	counter := &countingReader{Reader: r}
 	if err := i.readOutPoint(counter); err != nil {
@@ -372,11 +554,9 @@ func (i *Input) ReadFrom(r io.Reader) (int64, error) {
 
 // readOutPoint reads the next sequence of bytes from r as an OutPoint.
 func (i *Input) readOutPoint(r io.Reader) error {
-	var txid chainhash.Hash
-	if _, err := io.ReadFull(r, txid[:]); err != nil {
+	if _, err := io.ReadFull(r, i.PreviousOutPoint.Hash[:]); err != nil {
 		return err
 	}
-	i.PreviousOutPoint.Hash = txid
 
 	var index uint32
 	if err := binary.Read(r, binary.LittleEndian, &index); err != nil {
@@ -400,6 +580,10 @@ func (i *Input) WriteTo(w io.Writer) (int64, error) {
 	return counter.N, nil
 }
 
+func writeScript(w io.Writer, script []byte) error {
+	return wire.WriteVarBytes(w, 0, script)
+}
+
 // writeOutPoint encodes op to the bitcoin/zcash protocol encoding for an OutPoint
 // to w.
 func (i *Input) writeOutPoint(w io.Writer) error {
@@ -412,6 +596,16 @@ func (i *Input) writeOutPoint(w io.Writer) error {
 type Output struct {
 	Value        int64
 	ScriptPubKey []byte
+}
+
+func (o Output) IsEqual(other Output) bool {
+	if o.Value != other.Value {
+		return false
+	}
+	if string(o.ScriptPubKey) != string(other.ScriptPubKey) {
+		return false
+	}
+	return true
 }
 
 func (o *Output) ReadFrom(r io.Reader) (int64, error) {
@@ -431,4 +625,235 @@ func (o *Output) WriteTo(w io.Writer) (int64, error) {
 	}
 	err := writeScript(counter, o.ScriptPubKey)
 	return counter.N, err
+}
+
+type JoinSplit struct {
+	// A value v_{pub}^{old} that the JoinSplit transfer removes from the
+	// transparent value pool.
+	VPubOld uint64
+
+	// A value v_{pub}^{new} that the JoinSplit transfer inserts into the
+	// transparent value pool.
+	VPubNew uint64
+
+	// A merkle root of the note commitment tree at some block height in the
+	// past, or the merkle root produced by a previous JoinSplit transfer in this
+	// transaction.
+	//
+	// JoinSplits are always anchored to a root in the note commitment tree at
+	// some point in the blockchain history or in the history of the current
+	// transaction.
+	Anchor [32]byte
+
+	// A sequence of nullifiers of the input notes $nf$_{1..N^{old}}^{old}
+	//
+	// Nullifiers are used to prevent double-spends. They are derived from the
+	// secrets placed in the note and the secret spend-authority key known by the
+	// spender.
+	Nullifiers [NumJoinSplitInputs][32]byte
+
+	// A sequence of note commitments for the output notes $cm$_{1..N^{new}}^{new}
+	//
+	// Note commitments are introduced into the commitment tree, blinding the
+	// public about the values and destinations involved in the JoinSplit. The
+	// presence of a commitment in the note commitment tree is required to spend
+	// it.
+	Commitments [NumJoinSplitOutputs][32]byte
+
+	// A Curve25519 public key epk.
+	EphemeralKey [32]byte
+
+	// A 256-bit seed that must be chosen independently at random for each
+	// JoinSplit description.
+	RandomSeed [32]byte
+
+	// A sequence of message authentication tags h_{1..N^{old}} that bind h^{Sig}
+	// to each a_{sk} of the JoinSplit description.
+	//
+	// The verification of the JoinSplit requires these MACs to be provided as an
+	// input.
+	Macs [NumJoinSplitInputs][32]byte
+
+	// An encoding of the zero-knowledge proof \pi_{ZKJoinSplit}
+	//
+	// This is a zk-SNARK which ensures that this JoinSplit is valid.
+	Proof [296]byte
+
+	// A sequence of ciphertext components for the encrypted output notes,
+	// C_{1..N^{new}}^{enc}
+	//
+	// These contain trapdoors, values and other information that the recipient
+	// needs, including a memo field. It is encrypted using the scheme
+	// implemented in crypto/NoteEncryption.cpp
+	Ciphertexts [NumJoinSplitOutputs][601]byte
+}
+
+func (js *JoinSplit) ReadFrom(r io.Reader) (int64, error) {
+	counter := &countingReader{Reader: r}
+	for _, segment := range []func(io.Reader) error{
+		js.readVPubOld,
+		js.readVPubNew,
+		js.readAnchor,
+		js.readNullifiers,
+		js.readCommitments,
+		js.readEphemeralKey,
+		js.readRandomSeed,
+		js.readMacs,
+		js.readProof,
+		js.readCiphertexts,
+	} {
+		if err := segment(counter); err != nil {
+			return counter.N, err
+		}
+	}
+	return counter.N, nil
+}
+
+func (js *JoinSplit) readVPubOld(r io.Reader) error {
+	return binary.Read(r, binary.LittleEndian, &js.VPubOld)
+}
+
+func (js *JoinSplit) readVPubNew(r io.Reader) error {
+	return binary.Read(r, binary.LittleEndian, &js.VPubNew)
+}
+
+func (js *JoinSplit) readAnchor(r io.Reader) error {
+	_, err := io.ReadFull(r, js.Anchor[:])
+	return err
+}
+
+func (js *JoinSplit) readNullifiers(r io.Reader) error {
+	for _, x := range js.Nullifiers {
+		if _, err := io.ReadFull(r, x[:]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (js *JoinSplit) readCommitments(r io.Reader) error {
+	for _, x := range js.Commitments {
+		if _, err := io.ReadFull(r, x[:]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (js *JoinSplit) readEphemeralKey(r io.Reader) error {
+	_, err := io.ReadFull(r, js.Anchor[:])
+	return err
+}
+
+func (js *JoinSplit) readRandomSeed(r io.Reader) error {
+	_, err := io.ReadFull(r, js.Anchor[:])
+	return err
+}
+
+func (js *JoinSplit) readMacs(r io.Reader) error {
+	for _, x := range js.Macs {
+		if _, err := io.ReadFull(r, x[:]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (js *JoinSplit) readProof(r io.Reader) error {
+	_, err := io.ReadFull(r, js.Anchor[:])
+	return err
+}
+
+func (js *JoinSplit) readCiphertexts(r io.Reader) error {
+	for _, x := range js.Ciphertexts {
+		if _, err := io.ReadFull(r, x[:]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (js *JoinSplit) WriteTo(w io.Writer) (n int64, err error) {
+	counter := &countingWriter{Writer: w}
+	for _, segment := range []func(io.Writer) error{
+		js.writeVPubOld,
+		js.writeVPubNew,
+		js.writeAnchor,
+		js.writeNullifiers,
+		js.writeCommitments,
+		js.writeEphemeralKey,
+		js.writeRandomSeed,
+		js.writeMacs,
+		js.writeProof,
+		js.writeCiphertexts,
+	} {
+		if err := segment(counter); err != nil {
+			return counter.N, err
+		}
+	}
+	return counter.N, nil
+}
+
+func (js *JoinSplit) writeVPubOld(w io.Writer) error {
+	return binary.Write(w, binary.LittleEndian, uint64(js.VPubOld))
+}
+
+func (js *JoinSplit) writeVPubNew(w io.Writer) error {
+	return binary.Write(w, binary.LittleEndian, uint64(js.VPubNew))
+}
+
+func (js *JoinSplit) writeAnchor(w io.Writer) error {
+	_, err := w.Write(js.Anchor[:])
+	return err
+}
+
+func (js *JoinSplit) writeNullifiers(w io.Writer) error {
+	for _, x := range js.Nullifiers {
+		if _, err := w.Write(x[:]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (js *JoinSplit) writeCommitments(w io.Writer) error {
+	for _, x := range js.Commitments {
+		if _, err := w.Write(x[:]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (js *JoinSplit) writeEphemeralKey(w io.Writer) error {
+	_, err := w.Write(js.EphemeralKey[:])
+	return err
+}
+
+func (js *JoinSplit) writeRandomSeed(w io.Writer) error {
+	_, err := w.Write(js.RandomSeed[:])
+	return err
+}
+
+func (js *JoinSplit) writeMacs(w io.Writer) error {
+	for _, x := range js.Macs {
+		if _, err := w.Write(x[:]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (js *JoinSplit) writeProof(w io.Writer) error {
+	_, err := w.Write(js.Proof[:])
+	return err
+}
+
+func (js *JoinSplit) writeCiphertexts(w io.Writer) error {
+	for _, x := range js.Ciphertexts {
+		if _, err := w.Write(x[:]); err != nil {
+			return err
+		}
+	}
+	return nil
 }
