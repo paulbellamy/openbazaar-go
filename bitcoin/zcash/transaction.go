@@ -271,14 +271,14 @@ func (t *Transaction) WriteTo(w io.Writer) (n int64, err error) {
 	counter := &countingWriter{Writer: w}
 	for _, segment := range []func(io.Writer) error{
 		t.writeVersion,
-		t.writeVersionGroupID,
+		writeIf(t.IsOverwinter, writeField(t.VersionGroupID)),
 		t.writeInputs,
 		t.writeOutputs,
-		t.writeTimestamp,
-		t.writeExpiryHeight,
+		writeField(uint32(t.Timestamp.Unix())),
+		writeIf(t.IsOverwinter, writeField(t.ExpiryHeight)),
 		t.writeJoinSplits,
-		t.writeJoinSplitPubKey,
-		t.writeJoinSplitSignature,
+		writeIf(t.Version >= 2, writeBytes(t.JoinSplitPubKey[:])),
+		writeIf(t.Version >= 2, writeBytes(t.JoinSplitSignature[:])),
 	} {
 		if err := segment(counter); err != nil {
 			return counter.N, err
@@ -295,13 +295,6 @@ func (t *Transaction) writeVersion(w io.Writer) error {
 		version |= OverwinterFlagMask
 	}
 	return binary.Write(w, binary.LittleEndian, version)
-}
-
-func (t *Transaction) writeVersionGroupID(w io.Writer) error {
-	if !t.IsOverwinter {
-		return nil
-	}
-	return binary.Write(w, binary.LittleEndian, uint32(t.VersionGroupID))
 }
 
 func (t *Transaction) writeInputs(w io.Writer) error {
@@ -328,17 +321,6 @@ func (t *Transaction) writeOutputs(w io.Writer) error {
 	return nil
 }
 
-func (t *Transaction) writeTimestamp(w io.Writer) error {
-	return binary.Write(w, binary.LittleEndian, uint32(t.Timestamp.Unix()))
-}
-
-func (t *Transaction) writeExpiryHeight(w io.Writer) error {
-	if !t.IsOverwinter {
-		return nil
-	}
-	return binary.Write(w, binary.LittleEndian, uint32(t.ExpiryHeight))
-}
-
 func (t *Transaction) writeJoinSplits(w io.Writer) error {
 	if t.Version <= 1 {
 		return nil
@@ -352,22 +334,6 @@ func (t *Transaction) writeJoinSplits(w io.Writer) error {
 		}
 	}
 	return nil
-}
-
-func (t *Transaction) writeJoinSplitPubKey(w io.Writer) error {
-	if t.Version <= 1 {
-		return nil
-	}
-	_, err := w.Write(t.JoinSplitPubKey[:])
-	return err
-}
-
-func (t *Transaction) writeJoinSplitSignature(w io.Writer) error {
-	if t.Version <= 1 {
-		return nil
-	}
-	_, err := w.Write(t.JoinSplitSignature[:])
-	return err
 }
 
 func (tx *Transaction) Validate() error {
@@ -574,7 +540,7 @@ func (i *Input) WriteTo(w io.Writer) (int64, error) {
 	if err := writeScript(counter, i.SignatureScript); err != nil {
 		return counter.N, err
 	}
-	if err := binary.Write(counter, binary.LittleEndian, uint32(i.Sequence)); err != nil {
+	if err := writeField(i.Sequence)(counter); err != nil {
 		return counter.N, err
 	}
 	return counter.N, nil
@@ -620,7 +586,7 @@ func (o *Output) ReadFrom(r io.Reader) (int64, error) {
 
 func (o *Output) WriteTo(w io.Writer) (int64, error) {
 	counter := &countingWriter{Writer: w}
-	if err := binary.Write(counter, binary.LittleEndian, uint64(o.Value)); err != nil {
+	if err := writeField(o.Value)(counter); err != nil {
 		return counter.N, err
 	}
 	err := writeScript(counter, o.ScriptPubKey)
@@ -776,15 +742,15 @@ func (js *JoinSplit) readCiphertexts(r io.Reader) error {
 func (js *JoinSplit) WriteTo(w io.Writer) (n int64, err error) {
 	counter := &countingWriter{Writer: w}
 	for _, segment := range []func(io.Writer) error{
-		js.writeVPubOld,
-		js.writeVPubNew,
-		js.writeAnchor,
-		js.writeNullifiers,
-		js.writeCommitments,
-		js.writeEphemeralKey,
-		js.writeRandomSeed,
-		js.writeMacs,
-		js.writeProof,
+		writeField(js.VPubOld),
+		writeField(js.VPubNew),
+		writeBytes(js.Anchor[:]),
+		writeByteArray32(js.Nullifiers[:]),
+		writeByteArray32(js.Commitments[:]),
+		writeBytes(js.EphemeralKey[:]),
+		writeBytes(js.RandomSeed[:]),
+		writeByteArray32(js.Macs[:]),
+		writeBytes(js.Proof[:]),
 		js.writeCiphertexts,
 	} {
 		if err := segment(counter); err != nil {
@@ -794,61 +760,9 @@ func (js *JoinSplit) WriteTo(w io.Writer) (n int64, err error) {
 	return counter.N, nil
 }
 
-func (js *JoinSplit) writeVPubOld(w io.Writer) error {
-	return binary.Write(w, binary.LittleEndian, uint64(js.VPubOld))
-}
-
-func (js *JoinSplit) writeVPubNew(w io.Writer) error {
-	return binary.Write(w, binary.LittleEndian, uint64(js.VPubNew))
-}
-
-func (js *JoinSplit) writeAnchor(w io.Writer) error {
-	_, err := w.Write(js.Anchor[:])
-	return err
-}
-
-func (js *JoinSplit) writeNullifiers(w io.Writer) error {
-	for _, x := range js.Nullifiers {
-		if _, err := w.Write(x[:]); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (js *JoinSplit) writeCommitments(w io.Writer) error {
-	for _, x := range js.Commitments {
-		if _, err := w.Write(x[:]); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (js *JoinSplit) writeEphemeralKey(w io.Writer) error {
-	_, err := w.Write(js.EphemeralKey[:])
-	return err
-}
-
-func (js *JoinSplit) writeRandomSeed(w io.Writer) error {
-	_, err := w.Write(js.RandomSeed[:])
-	return err
-}
-
-func (js *JoinSplit) writeMacs(w io.Writer) error {
-	for _, x := range js.Macs {
-		if _, err := w.Write(x[:]); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func (js *JoinSplit) writeProof(w io.Writer) error {
-	_, err := w.Write(js.Proof[:])
-	return err
-}
-
+// writeCiphertexts is needed because ciphertexts is an odd size (not 32
+// bytes). We could probably eliminate this with some type inference magic,
+// but...
 func (js *JoinSplit) writeCiphertexts(w io.Writer) error {
 	for _, x := range js.Ciphertexts {
 		if _, err := w.Write(x[:]); err != nil {
@@ -856,4 +770,34 @@ func (js *JoinSplit) writeCiphertexts(w io.Writer) error {
 		}
 	}
 	return nil
+}
+
+func writeIf(pred bool, f func(w io.Writer) error) func(w io.Writer) error {
+	if pred {
+		return f
+	}
+	return func(w io.Writer) error { return nil }
+}
+
+func writeField(v interface{}) func(w io.Writer) error {
+	return func(w io.Writer) error {
+		return binary.Write(w, binary.LittleEndian, v)
+	}
+}
+
+func writeBytes(v []byte) func(w io.Writer) error {
+	return func(w io.Writer) error {
+		_, err := w.Write(v)
+		return err
+	}
+}
+
+func writeByteArray32(v [][32]byte) func(w io.Writer) error {
+	return func(w io.Writer) error {
+		for _, x := range v {
+			_, err := w.Write(x[:])
+			return err
+		}
+		return nil
+	}
 }
