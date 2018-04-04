@@ -120,7 +120,6 @@ func (t *Transaction) ReadFrom(r io.Reader) (n int64, err error) {
 }
 
 func (t *Transaction) readVersion(r io.Reader) error {
-	// TODO: Handle overwinter here
 	// Check the version
 	err := binary.Read(r, binary.LittleEndian, &t.Version)
 	if err != nil {
@@ -168,7 +167,6 @@ func (t *Transaction) readOutputs(r io.Reader) error {
 	if err != nil {
 		return err
 	}
-	// TODO: Check if we have coinbase inputs, then we must have 0 transparent outputs
 	for i := uint64(0); i < count; i++ {
 		var output Output
 		if _, err := output.ReadFrom(r); err != nil {
@@ -288,8 +286,6 @@ func (t *Transaction) WriteTo(w io.Writer) (n int64, err error) {
 }
 
 func (t *Transaction) writeVersion(w io.Writer) error {
-	// TODO: Handle joinsplits here
-	// TODO: Handle overwinter here
 	var version uint32 = t.Version
 	if t.IsOverwinter {
 		version |= OverwinterFlagMask
