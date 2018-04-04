@@ -1,7 +1,6 @@
 package zcash
 
 import (
-	"bytes"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -406,20 +405,6 @@ func (w *Wallet) Spend(amount int64, addr btc.Address, feeLevel wallet.FeeLevel)
 		return nil, err
 	}
 	return w.broadcastTx(txn)
-}
-
-func (w *Wallet) broadcastWireTx(tx *wire.MsgTx) (*chainhash.Hash, error) {
-	// Serialize the transaction and convert to hex string.
-	buf := bytes.NewBuffer(make([]byte, 0, tx.SerializeSize()))
-	if err := tx.Serialize(buf); err != nil {
-		return nil, err
-	}
-
-	hash, err := w.insight.Broadcast(buf.Bytes())
-	if err != nil {
-		return nil, err
-	}
-	return chainhash.NewHashFromStr(hash)
 }
 
 func (w *Wallet) broadcastTx(tx *Transaction) (*chainhash.Hash, error) {
@@ -841,33 +826,31 @@ func (w *Wallet) CreateMultisigSignature(ins []wallet.TransactionInput, outs []w
 // Combine signatures and optionally broadcast
 func (w *Wallet) Multisign(ins []wallet.TransactionInput, outs []wallet.TransactionOutput, sigs1 []wallet.Signature, sigs2 []wallet.Signature, redeemScript []byte, feePerByte uint64, broadcast bool) ([]byte, error) {
 	<-w.initChan
-	tx := wire.NewMsgTx(wire.TxVersion)
+	tx := &Transaction{Version: 1}
 	for _, in := range ins {
 		ch, err := chainhash.NewHashFromStr(hex.EncodeToString(in.OutpointHash))
 		if err != nil {
 			return nil, err
 		}
 		outpoint := wire.NewOutPoint(ch, in.OutpointIndex)
-		input := wire.NewTxIn(outpoint, []byte{}, [][]byte{})
-		tx.TxIn = append(tx.TxIn, input)
+		tx.Inputs = append(tx.Inputs, Input{PreviousOutPoint: *outpoint})
 	}
 	for _, out := range outs {
-		output := wire.NewTxOut(out.Value, out.ScriptPubKey)
-		tx.TxOut = append(tx.TxOut, output)
+		tx.Outputs = append(tx.Outputs, Output{Value: out.Value, ScriptPubKey: out.ScriptPubKey})
 	}
 
 	// Subtract fee
-	estimatedSize := spvwallet.EstimateSerializeSize(len(ins), tx.TxOut, false, spvwallet.P2SH_2of3_Multisig)
+	estimatedSize := EstimateSerializeSize(len(ins), tx.Outputs, false, spvwallet.P2SH_2of3_Multisig)
 	fee := estimatedSize * int(feePerByte)
-	feePerOutput := fee / len(tx.TxOut)
-	for _, output := range tx.TxOut {
+	feePerOutput := fee / len(tx.Outputs)
+	for _, output := range tx.Outputs {
 		output.Value -= int64(feePerOutput)
 	}
 
 	// BIP 69 sorting
-	txsort.InPlaceSort(tx)
+	tx.Sort()
 
-	for i, input := range tx.TxIn {
+	for i, input := range tx.Inputs {
 		var sig1 []byte
 		var sig2 []byte
 		for _, sig := range sigs1 {
@@ -892,13 +875,11 @@ func (w *Wallet) Multisign(ins []wallet.TransactionInput, outs []wallet.Transact
 		input.SignatureScript = scriptSig
 	}
 	if broadcast {
-		if _, err := w.broadcastWireTx(tx); err != nil {
+		if _, err := w.broadcastTx(tx); err != nil {
 			return nil, err
 		}
 	}
-	var buf bytes.Buffer
-	tx.BtcEncode(&buf, 1, wire.BaseEncoding)
-	return buf.Bytes(), nil
+	return tx.MarshalBinary()
 }
 
 // Generate a multisig script from public keys. If a timeout is included the returned script should be a timelocked escrow which releases using the timeoutKey.
