@@ -581,6 +581,16 @@ func (o *Output) WriteTo(w io.Writer) (int64, error) {
 	return counter.N, err
 }
 
+// SerializeSize returns the number of bytes it would take to serialize the
+// the transaction output.
+func (o *Output) SerializeSize() int {
+	return 8 + serializeScriptSize(o.ScriptPubKey)
+}
+
+func serializeScriptSize(script []byte) int {
+	return wire.VarIntSerializeSize(uint64(len(script) + len(script)))
+}
+
 type JoinSplit struct {
 	// A value v_{pub}^{old} that the JoinSplit transfer removes from the
 	// transparent value pool.

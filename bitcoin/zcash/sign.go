@@ -1,0 +1,167 @@
+package zcash
+
+import (
+	"errors"
+	"fmt"
+	"time"
+
+	"github.com/OpenBazaar/spvwallet"
+	"github.com/btcsuite/btcd/chaincfg"
+	"github.com/btcsuite/btcd/txscript"
+	"github.com/btcsuite/btcd/wire"
+	btc "github.com/btcsuite/btcutil"
+	"github.com/btcsuite/btcwallet/wallet/txauthor"
+	"github.com/btcsuite/btcwallet/wallet/txrules"
+)
+
+// TODO: Support pre-overwinter v2 joinsplit transactions here (maybe)
+func ProduceSignature(
+	chainParams *chaincfg.Params,
+	tx *Transaction,
+	idx int,
+	pkScript []byte,
+	hashType txscript.SigHashType,
+	kdb txscript.KeyDB,
+	sdb txscript.ScriptDB,
+	previousScript []byte,
+) ([]byte, error) {
+	if !tx.IsOverwinter {
+		msgTx, err := tx.ToWireMsgTx()
+		if err != nil {
+			return nil, err
+		}
+		return txscript.SignTxOutput(chainParams, msgTx, idx, pkScript, hashType, kdb, sdb, previousScript)
+	}
+	return nil, fmt.Errorf("overwinter transaction signing not implemented")
+}
+
+// ToWireMsgTx throws away some information to cram this in transaction into a
+// bitcoin-friendly format. So we can re-use some btc code for now.
+func (t *Transaction) ToWireMsgTx() (*wire.MsgTx, error) {
+	if t.Version != 1 || t.IsOverwinter || len(t.JoinSplits) > 0 {
+		return nil, fmt.Errorf("transaction cannot fit into bitcoin wire encoding")
+	}
+
+	msgTx := &wire.MsgTx{
+		Version:  int32(t.Version),
+		TxIn:     make([]*wire.TxIn, len(t.Inputs)),
+		TxOut:    make([]*wire.TxOut, len(t.Outputs)),
+		LockTime: uint32(t.Timestamp.Unix()),
+	}
+	for i, input := range t.Inputs {
+		msgTx.TxIn[i] = &wire.TxIn{
+			PreviousOutPoint: input.PreviousOutPoint,
+			SignatureScript:  input.SignatureScript,
+			Sequence:         input.Sequence,
+		}
+	}
+	for i, output := range t.Outputs {
+		msgTx.TxOut[i] = &wire.TxOut{
+			Value:    output.Value,
+			PkScript: output.ScriptPubKey,
+		}
+	}
+	return msgTx, nil
+}
+
+type InputSource func(target btc.Amount) (total btc.Amount, inputs []Input, scripts [][]byte, err error)
+
+// NewUnsignedTransaction is reused from spvwallet and modified to be less btc-specific
+func NewUnsignedTransaction(outputs []Output, feePerKb btc.Amount, fetchInputs InputSource, fetchChange txauthor.ChangeSource) (*Transaction, error) {
+
+	var targetAmount btc.Amount
+	for _, output := range outputs {
+		targetAmount += btc.Amount(output.Value)
+	}
+
+	estimatedSize := EstimateSerializeSize(1, outputs, true, spvwallet.P2PKH)
+	targetFee := txrules.FeeForSerializeSize(feePerKb, estimatedSize)
+
+	for {
+		inputAmount, inputs, _, err := fetchInputs(targetAmount + targetFee)
+		if err != nil {
+			return nil, err
+		}
+		if inputAmount < targetAmount+targetFee {
+			return nil, errors.New("insufficient funds available to construct transaction")
+		}
+
+		maxSignedSize := EstimateSerializeSize(len(inputs), outputs, true, spvwallet.P2PKH)
+		maxRequiredFee := txrules.FeeForSerializeSize(feePerKb, maxSignedSize)
+		remainingAmount := inputAmount - targetAmount
+		if remainingAmount < maxRequiredFee {
+			targetFee = maxRequiredFee
+			continue
+		}
+
+		unsignedTransaction := &Transaction{
+			Version:   1,
+			Inputs:    inputs,
+			Outputs:   outputs,
+			Timestamp: time.Time{},
+		}
+		changeAmount := inputAmount - targetAmount - maxRequiredFee
+		if changeAmount != 0 && !txrules.IsDustAmount(changeAmount,
+			spvwallet.P2PKHOutputSize, txrules.DefaultRelayFeePerKb) {
+			changeScript, err := fetchChange()
+			if err != nil {
+				return nil, err
+			}
+			if len(changeScript) > spvwallet.P2PKHPkScriptSize {
+				return nil, errors.New("fee estimation requires change " +
+					"scripts no larger than P2PKH output scripts")
+			}
+			change := Output{Value: int64(changeAmount), ScriptPubKey: changeScript}
+			l := len(outputs)
+			unsignedTransaction.Outputs = append(outputs[:l:l], change)
+		}
+
+		return unsignedTransaction, nil
+	}
+}
+
+// EstimateSerializeSize is reused from spvwallet and modified to be less btc-specific
+//
+// EstimateSerializeSize returns a worst case serialize size estimate for a
+// signed transaction that spends inputCount number of compressed P2PKH outputs
+// and contains each transaction output from txOuts.  The estimated size is
+// incremented for an additional P2PKH change output if addChangeOutput is true.
+func EstimateSerializeSize(inputCount int, txOuts []Output, addChangeOutput bool, inputType spvwallet.InputType) int {
+	changeSize := 0
+	outputCount := len(txOuts)
+	if addChangeOutput {
+		changeSize = spvwallet.P2PKHOutputSize
+		outputCount++
+	}
+
+	var redeemScriptSize int
+	switch inputType {
+	case spvwallet.P2PKH:
+		redeemScriptSize = spvwallet.RedeemP2PKHInputSize
+	case spvwallet.P2SH_1of2_Multisig:
+		redeemScriptSize = spvwallet.RedeemP2SH1of2MultisigInputSize
+	case spvwallet.P2SH_2of3_Multisig:
+		redeemScriptSize = spvwallet.RedeemP2SH2of3MultisigInputSize
+	case spvwallet.P2SH_Multisig_Timelock_1Sig:
+		redeemScriptSize = spvwallet.RedeemP2SHMultisigTimelock1InputSize
+	case spvwallet.P2SH_Multisig_Timelock_2Sigs:
+		redeemScriptSize = spvwallet.RedeemP2SHMultisigTimelock2InputSize
+	}
+
+	// 10 additional bytes are for version, locktime, and segwit flags
+	return 10 + wire.VarIntSerializeSize(uint64(inputCount)) +
+		wire.VarIntSerializeSize(uint64(outputCount)) +
+		inputCount*redeemScriptSize +
+		SumOutputSerializeSizes(txOuts) +
+		changeSize
+}
+
+// SumOutputSerializeSizes is reused from spvwallet and modified to be less btc-specific
+//
+// SumOutputSerializeSizes sums up the serialized size of the supplied outputs.
+func SumOutputSerializeSizes(outputs []Output) (serializeSize int) {
+	for _, output := range outputs {
+		serializeSize += output.SerializeSize()
+	}
+	return serializeSize
+}
