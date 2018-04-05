@@ -268,7 +268,7 @@ func (t *Transaction) MarshalBinary() ([]byte, error) {
 func (t *Transaction) WriteTo(w io.Writer) (n int64, err error) {
 	counter := &countingWriter{Writer: w}
 	for _, segment := range []func(io.Writer) error{
-		t.writeVersion,
+		writeField(t.GetHeader()),
 		writeIf(t.IsOverwinter, writeField(t.VersionGroupID)),
 		t.writeInputs,
 		t.writeOutputs,
@@ -285,12 +285,11 @@ func (t *Transaction) WriteTo(w io.Writer) (n int64, err error) {
 	return counter.N, nil
 }
 
-func (t *Transaction) writeVersion(w io.Writer) error {
-	var version uint32 = t.Version
+func (t *Transaction) GetHeader() uint32 {
 	if t.IsOverwinter {
-		version |= OverwinterFlagMask
+		return t.Version | OverwinterFlagMask
 	}
-	return binary.Write(w, binary.LittleEndian, version)
+	return t.Version
 }
 
 func (t *Transaction) writeInputs(w io.Writer) error {
@@ -768,4 +767,19 @@ func writeByteArray32(a [][32]byte) func(w io.Writer) error {
 		}
 		return nil
 	}
+}
+
+func writeAll(w io.Writer, items ...interface{}) error {
+	for _, item := range items {
+		if b, ok := item.([]byte); ok {
+			if err := writeBytes(b)(w); err != nil {
+				return err
+			}
+		} else {
+			if err := writeField(item)(w); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }

@@ -16,7 +16,7 @@ import (
 
 // TODO: Support pre-overwinter v2 joinsplit transactions here (maybe)
 func ProduceSignature(
-	chainParams *chaincfg.Params,
+	params *chaincfg.Params,
 	tx *Transaction,
 	idx int,
 	pkScript []byte,
@@ -24,15 +24,136 @@ func ProduceSignature(
 	kdb txscript.KeyDB,
 	sdb txscript.ScriptDB,
 	previousScript []byte,
+	amountIn int64,
 ) ([]byte, error) {
 	if !tx.IsOverwinter {
 		msgTx, err := tx.ToWireMsgTx()
 		if err != nil {
 			return nil, err
 		}
-		return txscript.SignTxOutput(chainParams, msgTx, idx, pkScript, hashType, kdb, sdb, previousScript)
+		return txscript.SignTxOutput(params, msgTx, idx, pkScript, hashType, kdb, sdb, previousScript)
 	}
-	return nil, fmt.Errorf("overwinter transaction signing not implemented")
+
+	creator := TransactionSignatureCreator(kdb, tx, idx, amountIn, hashType)
+	results, _, ok := SignStep(params, creator, pkScript, tx.VersionGroupID)
+	if !ok {
+		return nil, fmt.Errorf("unable to sign transaction")
+	}
+	/*
+		if !VerifySignature(creator, script, scriptClass, tx.VersionGroupID, result) {
+			return nil, fmt.Errorf("unable to sign transaction")
+		}
+	*/
+	return PushAll(results)
+}
+
+func PushAll(scripts [][]byte) ([]byte, error) {
+	result := txscript.NewScriptBuilder()
+	for _, script := range scripts {
+		switch {
+		case len(script) == 0:
+			result = result.AddOp(txscript.OP_0)
+		case len(script) == 1 && 1 <= script[0] && script[0] <= 16:
+			result = result.AddOp(script[0])
+		default:
+			result = result.AddData(script)
+		}
+	}
+	return result.Script()
+}
+
+func Sign1(address btc.Address, creator SignatureCreator, scriptCode []byte, consensusBranchId uint32) ([][]byte, bool) {
+	sig, ok := creator.CreateSig(address, scriptCode, consensusBranchId)
+	if !ok {
+		return nil, false
+	}
+	return [][]byte{sig}, true
+}
+
+func SignN(params *chaincfg.Params, multisigdata [][]byte, creator SignatureCreator, scriptCode []byte, consensusBranchId uint32) ([][]byte, bool) {
+	var ret [][]byte
+	var nSigned int = 0
+	var nRequired int = int(multisigdata[0][0])
+	for i := 1; i < len(multisigdata)-1 && nSigned < nRequired; i++ {
+		pubkey := multisigdata[i]
+		address, err := NewAddressPubKeyHash(btc.Hash160(pubkey), params)
+		if err != nil {
+			continue
+		}
+		sig, ok := Sign1(address, creator, scriptCode, consensusBranchId)
+		if !ok {
+			continue
+		}
+		nSigned++
+		ret = append(ret, sig...)
+	}
+	return ret, nSigned == nRequired
+}
+
+/**
+ * Sign scriptPubKey using signature made with creator.
+ * Signatures are returned in scriptSigRet (or returns false if scriptPubKey can't be signed),
+ * unless scriptClass is txscript.ScriptHashTy, in which case scriptSigRet is the redemption script.
+ * Returns false if scriptPubKey could not be completely satisfied.
+ */
+func SignStep(params *chaincfg.Params, creator SignatureCreator, scriptPubKey []byte, consensusBranchId uint32) ([][]byte, txscript.ScriptClass, bool) {
+	scriptClass, vSolutions, ok := Solver(scriptPubKey)
+	if !ok {
+		return nil, 0, false
+	}
+
+	var ret [][]byte
+
+	var keyID btc.Address
+	switch scriptClass {
+	case txscript.NonStandardTy, txscript.NullDataTy:
+		return nil, scriptClass, false
+
+	case txscript.PubKeyTy:
+		keyID := CPubKey(vSolutions[0]).GetID()
+		ret, ok := Sign1(keyID, creator, scriptPubKey, consensusBranchId)
+		return ret, scriptClass, ok
+
+	case txscript.PubKeyHashTy:
+		keyID = CKeyID(uint160(vSolutions[0]))
+		ret, ok := Sign1(keyID, creator, scriptPubKey, consensusBranchId)
+		if !ok {
+			return nil, scriptClass, false
+		}
+		var vch CPubKey
+		creator.KeyStore().GetPubKey(keyID, vch)
+		ret = append(ret, []byte(vch))
+		return ret, scriptClass, true
+
+	case txscript.ScriptHashTy:
+		var scriptRet []byte
+		if !creator.KeyStore().GetCScript(uint160(vSolutions[0]), scriptRet) {
+			return nil, scriptClass, false
+		}
+		ret = append(ret, scriptRet)
+
+		// Solver returns the subscript that needs to be evaluated;
+		// the final scriptSig is the signatures from that
+		// and then the serialized subscript:
+		var subscript = ret[0]
+		subscriptResults, subscriptType, ok := SignStep(params, creator, subscript, consensusBranchId)
+		if !ok || subscriptType == txscript.ScriptHashTy {
+			return nil, scriptClass, false
+		}
+		ret = append(ret, subscriptResults...)
+		return ret, scriptClass, true
+
+	case txscript.MultiSigTy:
+		ret, ok := SignN(params, vSolutions, creator, scriptPubKey, ret, consensusBranchId)
+		if !ok {
+			return nil, scriptClass, false
+		}
+		ret = append([]byte{{}}, ret...) // workaround CHECKMULTISIG bug
+		return ret, scriptClass, true
+
+	default:
+		return nil, scriptClass, false
+	}
 }
 
 // ToWireMsgTx throws away some information to cram this in transaction into a
@@ -126,6 +247,8 @@ func NewUnsignedTransaction(outputs []Output, feePerKb btc.Amount, fetchInputs I
 // signed transaction that spends inputCount number of compressed P2PKH outputs
 // and contains each transaction output from txOuts.  The estimated size is
 // incremented for an additional P2PKH change output if addChangeOutput is true.
+//
+// TODO: Include joinsplits in the size estimate
 func EstimateSerializeSize(inputCount int, txOuts []Output, addChangeOutput bool, inputType spvwallet.InputType) int {
 	changeSize := 0
 	outputCount := len(txOuts)
