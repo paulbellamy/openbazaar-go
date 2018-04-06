@@ -11,33 +11,35 @@ import (
 
 type SignatureCreator interface {
 	CreateSig(address btc.Address, scriptCode []byte, consensusBranchId uint32) ([]byte, bool)
+	txscript.KeyDB
+	txscript.ScriptDB
 }
 
-func TransactionSignatureCreator(kdb txscript.KeyDB, tx *Transaction, idx int, amountIn int64, hashType txscript.SigHashType) SignatureCreator {
+func TransactionSignatureCreator(kdb txscript.KeyDB, sdb txscript.ScriptDB, tx *Transaction, idx int, hashType txscript.SigHashType) SignatureCreator {
 	return &signatureCreator{
-		kdb:      kdb,
+		KeyDB:    kdb,
+		ScriptDB: sdb,
 		tx:       tx,
 		idx:      idx,
-		amountIn: amountIn,
 		hashType: hashType,
 	}
 }
 
 type signatureCreator struct {
-	kdb      txscript.KeyDB
+	txscript.KeyDB
+	txscript.ScriptDB
 	tx       *Transaction
 	idx      int
-	amountIn int64
 	hashType txscript.SigHashType
 }
 
 func (s *signatureCreator) CreateSig(address btc.Address, scriptCode []byte, consensusBranchId uint32) ([]byte, bool) {
-	key, _, err := s.kdb.GetKey(address)
+	key, _, err := s.GetKey(address)
 	if err != nil {
 		return nil, false
 	}
 
-	hash, err := SignatureHash(scriptCode, s.tx, s.idx, s.hashType, s.amountIn, consensusBranchId)
+	hash, err := SignatureHash(scriptCode, s.tx, s.idx, s.hashType, consensusBranchId)
 	if err != nil {
 		return nil, false
 	}
@@ -57,7 +59,7 @@ var (
 	JoinSplitsHashPersonalization = []byte("ZcashJSplitsHash")
 )
 
-func SignatureHash(scriptCode []byte, tx *Transaction, idx int, hashType txscript.SigHashType, amountIn int64, consensusBranchId uint32) ([]byte, error) {
+func SignatureHash(scriptCode []byte, tx *Transaction, idx int, hashType txscript.SigHashType, consensusBranchId uint32) ([]byte, error) {
 	if !tx.IsOverwinter {
 		// TODO: Implement this for pre-overwinter txns
 		return nil, fmt.Errorf("transaction signing for pre-overwinter txns not implemented")
@@ -148,9 +150,8 @@ func SignatureHash(scriptCode []byte, tx *Transaction, idx int, hashType txscrip
 		hashJoinSplits = ss.Sum(nil)
 	}
 
-	var leConsensusBranchId uint32 = htole32(consensusBranchId)
 	personalization := bytes.NewBufferString("ZcashSigHash")
-	if err := writeField(leConsensusBranchId)(personalization); err != nil {
+	if err := writeField(consensusBranchId)(personalization); err != nil {
 		return nil, err
 	}
 
@@ -180,10 +181,14 @@ func SignatureHash(scriptCode []byte, tx *Transaction, idx int, hashType txscrip
 		return nil, err
 	}
 
-	if idx != NOT_AN_INPUT {
+	if idx != NotAnInput {
 		// The input being signed (replacing the scriptSig with scriptCode + amount)
 		// The prevout may already be contained in hashPrevout, and the nSequence
 		// may already be contained in hashSequence.
+		var amountIn int64
+		if idx < len(tx.Outputs) {
+			amountIn = tx.Outputs[idx].Value
+		}
 
 		if err := tx.Inputs[idx].writeOutPoint(ss); err != nil {
 			return nil, err

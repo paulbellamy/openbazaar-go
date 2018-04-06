@@ -14,6 +14,9 @@ import (
 	"github.com/btcsuite/btcwallet/wallet/txrules"
 )
 
+// Special case nIn for signing JoinSplits.
+const NotAnInput int = -1
+
 // TODO: Support pre-overwinter v2 joinsplit transactions here (maybe)
 func ProduceSignature(
 	params *chaincfg.Params,
@@ -24,7 +27,6 @@ func ProduceSignature(
 	kdb txscript.KeyDB,
 	sdb txscript.ScriptDB,
 	previousScript []byte,
-	amountIn int64,
 ) ([]byte, error) {
 	if !tx.IsOverwinter {
 		msgTx, err := tx.ToWireMsgTx()
@@ -34,7 +36,7 @@ func ProduceSignature(
 		return txscript.SignTxOutput(params, msgTx, idx, pkScript, hashType, kdb, sdb, previousScript)
 	}
 
-	creator := TransactionSignatureCreator(kdb, tx, idx, amountIn, hashType)
+	creator := TransactionSignatureCreator(kdb, sdb, tx, idx, hashType)
 	results, _, ok := SignStep(params, creator, pkScript, tx.VersionGroupID)
 	if !ok {
 		return nil, fmt.Errorf("unable to sign transaction")
@@ -97,59 +99,51 @@ func SignN(params *chaincfg.Params, multisigdata [][]byte, creator SignatureCrea
  * Returns false if scriptPubKey could not be completely satisfied.
  */
 func SignStep(params *chaincfg.Params, creator SignatureCreator, scriptPubKey []byte, consensusBranchId uint32) ([][]byte, txscript.ScriptClass, bool) {
-	scriptClass, vSolutions, ok := Solver(scriptPubKey)
-	if !ok {
+	addr, err := ExtractPkScriptAddrs(scriptPubKey, params)
+	if err != nil {
 		return nil, 0, false
 	}
 
-	var ret [][]byte
-
-	var keyID btc.Address
+	scriptClass := txscript.GetScriptClass(scriptPubKey)
 	switch scriptClass {
 	case txscript.NonStandardTy, txscript.NullDataTy:
 		return nil, scriptClass, false
 
 	case txscript.PubKeyTy:
-		keyID := CPubKey(vSolutions[0]).GetID()
-		ret, ok := Sign1(keyID, creator, scriptPubKey, consensusBranchId)
+		ret, ok := Sign1(addr, creator, scriptPubKey, consensusBranchId)
 		return ret, scriptClass, ok
 
 	case txscript.PubKeyHashTy:
-		keyID = CKeyID(uint160(vSolutions[0]))
-		ret, ok := Sign1(keyID, creator, scriptPubKey, consensusBranchId)
+		ret, ok := Sign1(addr, creator, scriptPubKey, consensusBranchId)
 		if !ok {
 			return nil, scriptClass, false
 		}
-		var vch CPubKey
-		creator.KeyStore().GetPubKey(keyID, vch)
-		ret = append(ret, []byte(vch))
+		privKey, _, err := creator.GetKey(addr)
+		if err != nil {
+			return nil, scriptClass, false
+		}
+		ret = append(ret, privKey.PubKey().SerializeUncompressed())
 		return ret, scriptClass, true
 
 	case txscript.ScriptHashTy:
-		var scriptRet []byte
-		if !creator.KeyStore().GetCScript(uint160(vSolutions[0]), scriptRet) {
+		scriptRet, err := creator.GetScript(addr)
+		if err != nil {
 			return nil, scriptClass, false
 		}
-		ret = append(ret, scriptRet)
 
 		// Solver returns the subscript that needs to be evaluated;
 		// the final scriptSig is the signatures from that
 		// and then the serialized subscript:
-		var subscript = ret[0]
+		var subscript = scriptRet
 		subscriptResults, subscriptType, ok := SignStep(params, creator, subscript, consensusBranchId)
 		if !ok || subscriptType == txscript.ScriptHashTy {
 			return nil, scriptClass, false
 		}
-		ret = append(ret, subscriptResults...)
-		return ret, scriptClass, true
+		return append([][]byte{subscript}, subscriptResults...), scriptClass, true
 
 	case txscript.MultiSigTy:
-		ret, ok := SignN(params, vSolutions, creator, scriptPubKey, ret, consensusBranchId)
-		if !ok {
-			return nil, scriptClass, false
-		}
-		ret = append([]byte{{}}, ret...) // workaround CHECKMULTISIG bug
-		return ret, scriptClass, true
+		// TODO: Overwinter multisig signing not implemented
+		return nil, scriptClass, false
 
 	default:
 		return nil, scriptClass, false
