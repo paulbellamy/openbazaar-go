@@ -64,12 +64,8 @@ func PushAll(scripts [][]byte) ([]byte, error) {
 	return result.Script()
 }
 
-func Sign1(address btc.Address, creator SignatureCreator, scriptCode []byte, consensusBranchId uint32) ([][]byte, bool) {
-	sig, ok := creator.CreateSig(address, scriptCode, consensusBranchId)
-	if !ok {
-		return nil, false
-	}
-	return [][]byte{sig}, true
+func Sign1(address btc.Address, creator SignatureCreator, scriptCode []byte, consensusBranchId uint32) ([]byte, bool) {
+	return creator.CreateSig(address, scriptCode, consensusBranchId)
 }
 
 func SignN(params *chaincfg.Params, multisigdata [][]byte, creator SignatureCreator, scriptCode []byte, consensusBranchId uint32) ([][]byte, bool) {
@@ -87,7 +83,7 @@ func SignN(params *chaincfg.Params, multisigdata [][]byte, creator SignatureCrea
 			continue
 		}
 		nSigned++
-		ret = append(ret, sig...)
+		ret = append(ret, sig)
 	}
 	return ret, nSigned == nRequired
 }
@@ -110,11 +106,11 @@ func SignStep(params *chaincfg.Params, creator SignatureCreator, scriptPubKey []
 		return nil, scriptClass, false
 
 	case txscript.PubKeyTy:
-		ret, ok := Sign1(addr, creator, scriptPubKey, consensusBranchId)
-		return ret, scriptClass, ok
+		sig, ok := Sign1(addr, creator, scriptPubKey, consensusBranchId)
+		return [][]byte{sig}, scriptClass, ok
 
 	case txscript.PubKeyHashTy:
-		ret, ok := Sign1(addr, creator, scriptPubKey, consensusBranchId)
+		sig, ok := Sign1(addr, creator, scriptPubKey, consensusBranchId)
 		if !ok {
 			return nil, scriptClass, false
 		}
@@ -122,8 +118,7 @@ func SignStep(params *chaincfg.Params, creator SignatureCreator, scriptPubKey []
 		if err != nil {
 			return nil, scriptClass, false
 		}
-		ret = append(ret, privKey.PubKey().SerializeUncompressed())
-		return ret, scriptClass, true
+		return append([][]byte{sig}, privKey.PubKey().SerializeUncompressed()), scriptClass, true
 
 	case txscript.ScriptHashTy:
 		scriptRet, err := creator.GetScript(addr)

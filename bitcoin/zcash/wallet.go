@@ -19,7 +19,6 @@ import (
 	btc "github.com/btcsuite/btcutil"
 	"github.com/btcsuite/btcutil/coinset"
 	hd "github.com/btcsuite/btcutil/hdkeychain"
-	"github.com/btcsuite/btcutil/txsort"
 	"github.com/btcsuite/btcwallet/wallet/txrules"
 	"github.com/op/go-logging"
 	b39 "github.com/tyler-smith/go-bip39"
@@ -781,40 +780,52 @@ func (w *Wallet) CreateMultisigSignature(ins []wallet.TransactionInput, outs []w
 		return nil, fmt.Errorf("transaction has no outputs")
 	}
 	var sigs []wallet.Signature
-	tx := wire.NewMsgTx(wire.TxVersion)
+	tx := &Transaction{Version: 1}
 	for _, in := range ins {
 		ch, err := chainhash.NewHashFromStr(hex.EncodeToString(in.OutpointHash))
 		if err != nil {
 			return sigs, err
 		}
 		outpoint := wire.NewOutPoint(ch, in.OutpointIndex)
-		input := wire.NewTxIn(outpoint, []byte{}, [][]byte{})
-		tx.TxIn = append(tx.TxIn, input)
+		tx.Inputs = append(tx.Inputs, Input{PreviousOutPoint: *outpoint})
 	}
 	for _, out := range outs {
-		output := wire.NewTxOut(out.Value, out.ScriptPubKey)
-		tx.TxOut = append(tx.TxOut, output)
+		tx.Outputs = append(tx.Outputs, Output{Value: out.Value, ScriptPubKey: out.ScriptPubKey})
 	}
 
 	// Subtract fee
-	estimatedSize := spvwallet.EstimateSerializeSize(len(ins), tx.TxOut, false, spvwallet.P2SH_2of3_Multisig)
+	estimatedSize := EstimateSerializeSize(len(ins), tx.Outputs, false, spvwallet.P2SH_2of3_Multisig)
 	fee := estimatedSize * int(feePerByte)
-	feePerOutput := fee / len(tx.TxOut)
-	for _, output := range tx.TxOut {
+	feePerOutput := fee / len(tx.Outputs)
+	for _, output := range tx.Outputs {
 		output.Value -= int64(feePerOutput)
 	}
 
 	// BIP 69 sorting
-	txsort.InPlaceSort(tx)
+	tx.Sort()
 
 	signingKey, err := key.ECPrivKey()
 	if err != nil {
 		return sigs, err
 	}
 
-	for i := range tx.TxIn {
-		sig, err := txscript.RawTxInSignature(tx, i, redeemScript, txscript.SigHashAll, signingKey)
-		if err != nil {
+	addr, err := keyToAddress(key, w.Params())
+	if err != nil {
+		return sigs, err
+	}
+
+	getKey := txscript.KeyClosure(func(addr btc.Address) (*btcec.PrivateKey, bool, error) {
+		return signingKey, false, nil
+	})
+	getScript := txscript.ScriptClosure(func(addr btc.Address) ([]byte, error) {
+		return redeemScript, nil
+	})
+
+	for i := range tx.Inputs {
+		// TODO: Check Sign1 is the right thing to use here, it seems like we could refactor this to ProduceSignature, maybe.
+		creator := TransactionSignatureCreator(getKey, getScript, tx, i, txscript.SigHashAll)
+		sig, ok := Sign1(addr, creator, redeemScript, tx.VersionGroupID)
+		if !ok {
 			continue
 		}
 		bs := wallet.Signature{InputIndex: uint32(i), Signature: sig}
