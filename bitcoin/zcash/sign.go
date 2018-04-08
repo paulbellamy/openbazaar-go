@@ -41,11 +41,6 @@ func ProduceSignature(
 	if !ok {
 		return nil, fmt.Errorf("unable to sign transaction")
 	}
-	/*
-		if !VerifySignature(creator, script, scriptClass, tx.VersionGroupID, result) {
-			return nil, fmt.Errorf("unable to sign transaction")
-		}
-	*/
 	return PushAll(results)
 }
 

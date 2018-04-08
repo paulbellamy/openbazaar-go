@@ -15,15 +15,18 @@ import (
 )
 
 var (
-	ErrOverwinterTxVersionInvalid             = fmt.Errorf("overwinter transaction version must be 3")
-	ErrOverwinterTxUnknownVersionGroupID      = fmt.Errorf("transaction has unknown version group id")
-	ErrTxVersionTooSmall                      = fmt.Errorf("transaction version must be greater than 0")
-	ErrTxVersionTooLarge                      = fmt.Errorf("transaction version must be less than 3")
-	ErrNoTxInputs                             = fmt.Errorf("transaction has no inputs")
-	ErrNoTxOutputs                            = fmt.Errorf("transaction has no outputs")
-	ErrDuplicateTxInputs                      = fmt.Errorf("transaction contains duplicate inputs")
-	ErrBadTxInput                             = fmt.Errorf("transaction input refers to previous output that is null")
-	ErrCoinBaseTxMustHaveNoTransparentOutputs = fmt.Errorf("transaction with coinbase input must have no transparent outputs")
+	ErrOverwinterTxVersionTooLow = fmt.Errorf("overwinter transaction version too low")
+	ErrUnknownTxVersionGroupID   = fmt.Errorf("transaction has unknown version group id")
+	ErrTxExpiryHeightIsTooHigh   = fmt.Errorf("transaction expiry height is too high")
+	ErrTxVersionTooLow           = fmt.Errorf("transaction version too low")
+	ErrTxVersionTooHigh          = fmt.Errorf("transaction version too high")
+	ErrNoTxInputs                = fmt.Errorf("transaction has no inputs")
+	ErrNoTxOutputs               = fmt.Errorf("transaction has no outputs")
+	ErrDuplicateTxInputs         = fmt.Errorf("transaction contains duplicate inputs")
+	ErrDuplicateTxNullifiers     = fmt.Errorf("transaction contains duplicate nullifiers")
+	ErrPrevOutIsNull             = fmt.Errorf("transaction input refers to null previous output")
+	ErrCoinBaseTxHasJoinSplits   = fmt.Errorf("coinbase transaction has joinsplits")
+	ErrCoinBaseTxHasOutputs      = fmt.Errorf("coinbase transaction has outputs")
 
 	zeroHash chainhash.Hash
 )
@@ -32,9 +35,17 @@ const (
 	NumJoinSplitInputs  = 2
 	NumJoinSplitOutputs = 2
 
+	SproutVersionGroupID uint32 = 0
+
 	OverwinterFlagMask       uint32 = 0x80000000
-	OverwinterVersionMask           = 0x7FFFFFFF
 	OverwinterVersionGroupID        = 0x03C48270
+
+	TxExpiryHeightThreshold uint32 = 500000000
+
+	SproutMinCurrentVersion     uint32 = 1
+	SproutMaxCurrentVersion            = 2
+	OverwinterMinCurrentVersion        = 3
+	OverwinterMaxCurrentVersion        = 3
 )
 
 type Transaction struct {
@@ -126,14 +137,12 @@ func (t *Transaction) readVersion(r io.Reader) error {
 		return err
 	}
 	t.IsOverwinter = (t.Version & OverwinterFlagMask) > 0
+	fmt.Printf("[DEBUG] readVersion: %d, isOverwinter: %v\n", t.Version, t.IsOverwinter)
 	if t.IsOverwinter {
-		t.Version = t.Version & OverwinterVersionMask
-		if t.Version != 3 {
-			return fmt.Errorf("invalid txn version %v", t.Version)
-		}
-	} else if t.Version < 1 || 2 < t.Version {
-		return fmt.Errorf("invalid txn version %v", t.Version)
+		t.Version = t.Version &^ OverwinterFlagMask
 	}
+	t.Version = 1
+	t.IsOverwinter = false
 	return err
 }
 
@@ -141,6 +150,7 @@ func (t *Transaction) readVersionGroupID(r io.Reader) error {
 	if !t.IsOverwinter {
 		return nil
 	}
+	fmt.Printf("[DEBUG] readVersionGroupID\n")
 	return binary.Read(r, binary.LittleEndian, &t.VersionGroupID)
 }
 
@@ -149,6 +159,7 @@ func (t *Transaction) readInputs(r io.Reader) error {
 	if err != nil {
 		return err
 	}
+	fmt.Printf("[DEBUG] readInputs: %d\n", count)
 	if t.Version == 1 && count <= 0 {
 		return fmt.Errorf("txn must have transparent inputs")
 	}
@@ -163,6 +174,7 @@ func (t *Transaction) readInputs(r io.Reader) error {
 }
 
 func (t *Transaction) readOutputs(r io.Reader) error {
+	fmt.Printf("[DEBUG] readOutputs\n")
 	count, err := wire.ReadVarInt(r, 0)
 	if err != nil {
 		return err
@@ -185,6 +197,7 @@ func (t *Transaction) readOutputs(r io.Reader) error {
 // fieldName parameter is only used for the error message so it provides more
 // context in the error.
 func readScript(r io.Reader, fieldName string) ([]byte, error) {
+	fmt.Printf("[DEBUG] readScript\n")
 	count, err := wire.ReadVarInt(r, 0)
 	if err != nil {
 		return nil, err
@@ -208,6 +221,7 @@ func readScript(r io.Reader, fieldName string) ([]byte, error) {
 }
 
 func (t *Transaction) readTimestamp(r io.Reader) error {
+	fmt.Printf("[DEBUG] readTimestamp\n")
 	var timestamp uint32
 	if err := binary.Read(r, binary.LittleEndian, &timestamp); err != nil {
 		return err
@@ -220,6 +234,7 @@ func (t *Transaction) readExpiryHeight(r io.Reader) error {
 	if !t.IsOverwinter {
 		return nil
 	}
+	fmt.Printf("[DEBUG] readExpiryHeight\n")
 	return binary.Read(r, binary.LittleEndian, &t.ExpiryHeight)
 }
 
@@ -227,6 +242,7 @@ func (t *Transaction) readJoinSplits(r io.Reader) error {
 	if t.Version <= 1 {
 		return nil
 	}
+	fmt.Printf("[DEBUG] readJoinSplits\n")
 	count, err := wire.ReadVarInt(r, 0)
 	if err != nil {
 		return err
@@ -329,28 +345,30 @@ func (t *Transaction) writeJoinSplits(w io.Writer) error {
 }
 
 func (tx *Transaction) Validate() error {
-	if tx.IsOverwinter && tx.Version != 3 {
-		return ErrOverwinterTxVersionInvalid
-	} else if !tx.IsOverwinter && tx.Version <= 0 {
-		return ErrTxVersionTooSmall
-	} else if !tx.IsOverwinter && tx.Version >= 3 {
-		return ErrTxVersionTooLarge
-	}
-	if tx.IsOverwinter && tx.VersionGroupID != OverwinterVersionGroupID {
-		return ErrOverwinterTxUnknownVersionGroupID
-	}
-	// A transaction must have at least one input.
-	if len(tx.Inputs) == 0 {
-		return ErrNoTxInputs
+
+	if !tx.IsOverwinter && tx.Version < SproutMinCurrentVersion {
+		return ErrTxVersionTooLow
+	} else if tx.IsOverwinter {
+		if tx.Version < OverwinterMinCurrentVersion {
+			return ErrOverwinterTxVersionTooLow
+		}
+		if tx.VersionGroupID != OverwinterVersionGroupID {
+			return ErrUnknownTxVersionGroupID
+		}
+		if tx.ExpiryHeight >= TxExpiryHeightThreshold {
+			return ErrTxExpiryHeightIsTooHigh
+		}
 	}
 
-	// A transaction must have at least one output.
-	if len(tx.Outputs) == 0 {
+	// Transactions can contain empty `vin` and `vout` so long as
+	// `vjoinsplit` is non-empty.
+	if len(tx.Inputs) == 0 && len(tx.JoinSplits) == 0 {
+		return ErrNoTxInputs
+	}
+	if len(tx.Outputs) == 0 && len(tx.JoinSplits) == 0 {
 		return ErrNoTxOutputs
 	}
 
-	// A transaction must not exceed the maximum allowed block payload when
-	// serialized.
 	serialized, err := tx.MarshalBinary()
 	if err != nil {
 		return err
@@ -369,23 +387,58 @@ func (tx *Transaction) Validate() error {
 	// SatoshiPerBitcoin constant.
 	var totalSatoshi int64
 	for _, txOut := range tx.Outputs {
-		satoshi := txOut.Value
-		if satoshi < 0 {
-			return fmt.Errorf("transaction output has negative value of %v", satoshi)
+		if txOut.Value < 0 {
+			return fmt.Errorf("transaction output has negative value of %v", txOut.Value)
 		}
-		if satoshi > btcutil.MaxSatoshi {
-			return fmt.Errorf("transaction output value of %v is higher than max allowed value of %v", satoshi, btcutil.MaxSatoshi)
+		if txOut.Value > btcutil.MaxSatoshi {
+			return fmt.Errorf("transaction output value of %v is higher than max allowed value of %v", txOut.Value, btcutil.MaxSatoshi)
+		}
+		totalSatoshi += txOut.Value
+		if !MoneyRange(totalSatoshi) {
+			return fmt.Errorf("txout total out of range")
+		}
+	}
+
+	// Ensure that joinsplit values are well-formed
+	for _, joinSplit := range tx.JoinSplits {
+		if joinSplit.VPubOld < 0 {
+			return fmt.Errorf("joinsplit.VPubOld negative")
 		}
 
-		// Two's complement int64 overflow guarantees that any overflow
-		// is detected and reported.  This is impossible for Bitcoin, but
-		// perhaps possible if an alt increases the total money supply.
-		totalSatoshi += satoshi
-		if totalSatoshi < 0 {
-			return fmt.Errorf("total value of all transaction outputs exceeds max allowed value of %v", btcutil.MaxSatoshi)
+		if joinSplit.VPubNew < 0 {
+			return fmt.Errorf("joinsplit.VPubNew negative")
 		}
-		if totalSatoshi > btcutil.MaxSatoshi {
-			return fmt.Errorf("total value of all transaction outputs is %v which is higher than max allowed value of %v", totalSatoshi, btcutil.MaxSatoshi)
+
+		if joinSplit.VPubOld > btcutil.MaxSatoshi {
+			return fmt.Errorf("joinsplit.VPubOld too high")
+		}
+
+		if joinSplit.VPubNew > btcutil.MaxSatoshi {
+			return fmt.Errorf("joinsplit.VPubNew too high")
+		}
+
+		if joinSplit.VPubNew != 0 && joinSplit.VPubOld != 0 {
+			return fmt.Errorf("joinsplit.VPubNew and joinsplit.VPubOld both nonzero")
+		}
+
+		totalSatoshi += int64(joinSplit.VPubOld)
+		if !MoneyRange(totalSatoshi) {
+			return fmt.Errorf("txout total out of range")
+		}
+	}
+
+	// Ensure input values do not exceed btcutil.MaxSatoshi
+	// We have not resolved the txin values at this stage,
+	// but we do know what the joinsplits claim to add
+	// to the value pool.
+	{
+		var nValueIn int64 = 0
+		for _, joinSplit := range tx.JoinSplits {
+			nValueIn += int64(joinSplit.VPubNew)
+
+			if !MoneyRange(int64(joinSplit.VPubNew)) || !MoneyRange(nValueIn) {
+				return fmt.Errorf("txin total out of range")
+			}
 		}
 	}
 
@@ -398,14 +451,33 @@ func (tx *Transaction) Validate() error {
 		existingTxOut[txIn.PreviousOutPoint] = struct{}{}
 	}
 
-	// Coinbase script length must be between min and max length.
+	// Check for duplicate joinsplit nullifiers in this transaction
+	existingNullifiers := make(map[string]struct{})
+	for _, joinSplit := range tx.JoinSplits {
+		for _, nf := range joinSplit.Nullifiers {
+			key := string(nf[:])
+			if _, exists := existingNullifiers[key]; exists {
+				return ErrDuplicateTxNullifiers
+			}
+			existingNullifiers[key] = struct{}{}
+		}
+	}
+
 	if tx.IsCoinBase() {
+		// There should be no joinsplits in a coinbase transaction
+		if len(tx.JoinSplits) > 0 {
+			return ErrCoinBaseTxHasJoinSplits
+		}
+
+		// Coinbase script length must be between min and max length.
 		slen := len(tx.Inputs[0].SignatureScript)
 		if slen < blockchain.MinCoinbaseScriptLen || slen > blockchain.MaxCoinbaseScriptLen {
 			return fmt.Errorf("coinbase transaction script length of %d is out of range (min: %d, max: %d)", slen, blockchain.MinCoinbaseScriptLen, blockchain.MaxCoinbaseScriptLen)
 		}
+
+		// Coinbase txns must have no outputs
 		if len(tx.Outputs) > 0 {
-			return ErrCoinBaseTxMustHaveNoTransparentOutputs
+			return ErrCoinBaseTxHasOutputs
 		}
 	} else {
 		// Previous transaction outputs referenced by the inputs to this
@@ -413,12 +485,16 @@ func (tx *Transaction) Validate() error {
 		for _, txIn := range tx.Inputs {
 			prevOut := &txIn.PreviousOutPoint
 			if isNullOutpoint(prevOut) {
-				return ErrBadTxInput
+				return ErrPrevOutIsNull
 			}
 		}
 	}
 
 	return nil
+}
+
+func MoneyRange(v int64) bool {
+	return 0 <= v && v < btcutil.MaxSatoshi
 }
 
 // isNullOutpoint determines whether or not a previous transaction output point

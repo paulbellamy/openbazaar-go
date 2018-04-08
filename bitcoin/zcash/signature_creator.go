@@ -2,9 +2,11 @@ package zcash
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"fmt"
 	"gx/ipfs/QmaPHkZLbQQbvcyavn8q1GFHg6o6yeceyHFSJ3Pjf3p3TQ/go-crypto/blake2b"
 
+	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/txscript"
 	btc "github.com/btcsuite/btcutil"
 )
@@ -60,11 +62,18 @@ var (
 )
 
 func SignatureHash(scriptCode []byte, tx *Transaction, idx int, hashType txscript.SigHashType, consensusBranchId uint32) ([]byte, error) {
-	if !tx.IsOverwinter {
-		// TODO: Implement this for pre-overwinter txns
-		return nil, fmt.Errorf("transaction signing for pre-overwinter txns not implemented")
+	if idx >= len(tx.Inputs) && idx != NotAnInput {
+		// index out of range
+		return nil, fmt.Errorf("input index is out of range")
 	}
 
+	if tx.IsOverwinter {
+		return overwinterSignatureHash(scriptCode, tx, idx, hashType, consensusBranchId)
+	}
+	return sproutSignatureHash(scriptCode, tx, idx, hashType)
+}
+
+func overwinterSignatureHash(scriptCode []byte, tx *Transaction, idx int, hashType txscript.SigHashType, consensusBranchId uint32) ([]byte, error) {
 	/*
 			BLAKE2b-256 hash of the serialization of:
 		  1. header of the transaction (4-byte little endian)
@@ -199,4 +208,102 @@ func SignatureHash(scriptCode []byte, tx *Transaction, idx int, hashType txscrip
 	}
 
 	return ss.Sum(nil), nil
+}
+
+func sproutSignatureHash(scriptCode []byte, tx *Transaction, idx int, hashType txscript.SigHashType) ([]byte, error) {
+	// Check for invalid use of SIGHASH_SINGLE
+	if (hashType & 0x1f) == txscript.SigHashSingle {
+		if idx >= len(tx.Outputs) {
+			//  nOut out of range
+			return nil, fmt.Errorf("no matching output for SIGHASH_SINGLE")
+		}
+	}
+
+	var one chainhash.Hash
+	one[0] = 0x01
+	if idx >= len(tx.Inputs) || idx == NotAnInput {
+		return one[:], nil
+	}
+	txTmp := tx.shallowCopy()
+
+	// Blank out other inputs' signatures
+	for i := 0; i < len(txTmp.Inputs); i++ {
+		txTmp.Inputs[i].SignatureScript = nil
+	}
+	txTmp.Inputs[idx].SignatureScript = scriptCode
+
+	// Blank out some of the outputs
+	if (hashType & 0x1f) == txscript.SigHashNone {
+		// Wildcard payee
+		txTmp.Outputs = nil
+
+		// Let the others update at will
+		for i := 0; i < len(txTmp.Inputs); i++ {
+			if i != idx {
+				txTmp.Inputs[i].Sequence = 0
+			}
+		}
+	} else if (hashType & 0x1f) == txscript.SigHashSingle {
+		// Only lock-in the txout payee at same index as txin
+		nOut := idx
+		if nOut >= len(txTmp.Outputs) {
+			return one[:], nil
+		}
+		txTmp.Outputs = txTmp.Outputs[:nOut+1]
+		for i := 0; i < nOut; i++ {
+			txTmp.Outputs[i] = Output{}
+		}
+
+		// Let the others update at will
+		for i := 0; i < len(txTmp.Inputs); i++ {
+			if i != idx {
+				txTmp.Inputs[i].Sequence = 0
+			}
+		}
+	}
+
+	// Blank out other inputs completely, not recommended for open transactions
+	if hashType&txscript.SigHashAnyOneCanPay > 0 {
+		txTmp.Inputs = []Input{txTmp.Inputs[idx]}
+	}
+
+	// Blank out the joinsplit signature.
+	txTmp.JoinSplitSignature = [64]byte{}
+
+	// Serialize and hash
+	txBin, err := txTmp.MarshalBinary()
+	if err != nil {
+		return nil, err
+	}
+	return sha256.New().Sum(append(txBin, byte(hashType))), nil
+}
+
+// shallowCopy creates a shallow copy of the transaction for use when
+// calculating the signature hash.  It is used over the Copy method on the
+// transaction itself since that is a deep copy and therefore does more work and
+// allocates much more space than needed.
+func (tx Transaction) shallowCopy() Transaction {
+	// As an additional memory optimization, use contiguous backing arrays
+	// for the copied inputs and outputs and point the final slice of
+	// pointers into the contiguous arrays.  This avoids a lot of small
+	// allocations.
+	txCopy := tx
+	txCopy.Inputs = make([]Input, len(tx.Inputs))
+	txCopy.Outputs = make([]Output, len(tx.Outputs))
+	txCopy.JoinSplits = make([]JoinSplit, len(tx.JoinSplits))
+	txCopy.JoinSplitPubKey = [32]byte{}
+	txCopy.JoinSplitSignature = [64]byte{}
+
+	for i := range tx.Inputs {
+		txCopy.Inputs[i] = tx.Inputs[i]
+	}
+	for i := range tx.Outputs {
+		txCopy.Outputs[i] = tx.Outputs[i]
+	}
+	for i := range tx.JoinSplits {
+		txCopy.JoinSplits[i] = tx.JoinSplits[i]
+	}
+	copy(txCopy.JoinSplitPubKey[:], tx.JoinSplitPubKey[:])
+	copy(txCopy.JoinSplitSignature[:], tx.JoinSplitSignature[:])
+	return txCopy
 }
