@@ -2,7 +2,8 @@ package zcash
 
 import (
 	"bytes"
-	"crypto/sha256"
+	"encoding/binary"
+	"encoding/hex"
 	"fmt"
 	"gx/ipfs/QmaPHkZLbQQbvcyavn8q1GFHg6o6yeceyHFSJ3Pjf3p3TQ/go-crypto/blake2b"
 
@@ -108,7 +109,7 @@ func overwinterSignatureHash(scriptCode []byte, tx *Transaction, idx int, hashTy
 		hashPrevouts = ss.Sum(nil)
 	}
 
-	if (hashType&txscript.SigHashAnyOneCanPay == 0) && (hashType&0x1f) != txscript.SigHashSingle && (hashType&0x1f) != txscript.SigHashNone {
+	if (hashType&txscript.SigHashAnyOneCanPay == 0) && (hashType&sigHashMask) != txscript.SigHashSingle && (hashType&sigHashMask) != txscript.SigHashNone {
 		ss, err := blake2b.New256(SequenceHashPersonalization)
 		if err != nil {
 			return nil, err
@@ -121,7 +122,7 @@ func overwinterSignatureHash(scriptCode []byte, tx *Transaction, idx int, hashTy
 		hashSequence = ss.Sum(nil)
 	}
 
-	if (hashType&0x1f) != txscript.SigHashSingle && (hashType&0x1f) != txscript.SigHashNone {
+	if (hashType&sigHashMask) != txscript.SigHashSingle && (hashType&sigHashMask) != txscript.SigHashNone {
 		ss, err := blake2b.New256(OutputsHashPersonalization)
 		if err != nil {
 			return nil, err
@@ -132,7 +133,7 @@ func overwinterSignatureHash(scriptCode []byte, tx *Transaction, idx int, hashTy
 			}
 		}
 		hashOutputs = ss.Sum(nil)
-	} else if (hashType&0x1f) == txscript.SigHashSingle && idx < len(tx.Outputs) {
+	} else if (hashType&sigHashMask) == txscript.SigHashSingle && idx < len(tx.Outputs) {
 		ss, err := blake2b.New256(OutputsHashPersonalization)
 		if err != nil {
 			return nil, err
@@ -210,72 +211,88 @@ func overwinterSignatureHash(scriptCode []byte, tx *Transaction, idx int, hashTy
 	return ss.Sum(nil), nil
 }
 
-func sproutSignatureHash(scriptCode []byte, tx *Transaction, idx int, hashType txscript.SigHashType) ([]byte, error) {
-	// Check for invalid use of SIGHASH_SINGLE
-	if (hashType & 0x1f) == txscript.SigHashSingle {
-		if idx >= len(tx.Outputs) {
-			//  nOut out of range
-			return nil, fmt.Errorf("no matching output for SIGHASH_SINGLE")
-		}
-	}
+// sigHashMask defines the number of bits of the hash type which is used
+// to identify which outputs are signed.
+const sigHashMask = 0x1f
 
+func sproutSignatureHash(scriptCode []byte, tx *Transaction, idx int, hashType txscript.SigHashType) ([]byte, error) {
+	fmt.Printf("[DEBUG] sproutSignatureHash(%q, tx, %v, %q)\n", hex.EncodeToString(scriptCode), idx, hashType)
 	var one chainhash.Hash
 	one[0] = 0x01
 	if idx >= len(tx.Inputs) || idx == NotAnInput {
 		return one[:], nil
 	}
-	txTmp := tx.shallowCopy()
+
+	disasmScript, err := txscript.DisasmString(scriptCode)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Printf("[DEBUG] Disassembled script: %q\n", disasmScript)
+
+	txCopy := tx.shallowCopy()
 
 	// Blank out other inputs' signatures
-	for i := 0; i < len(txTmp.Inputs); i++ {
-		txTmp.Inputs[i].SignatureScript = nil
+	for i := range txCopy.Inputs {
+		txCopy.Inputs[i].SignatureScript = nil
 	}
-	txTmp.Inputs[idx].SignatureScript = scriptCode
+	txCopy.Inputs[idx].SignatureScript = scriptCode
 
-	// Blank out some of the outputs
-	if (hashType & 0x1f) == txscript.SigHashNone {
-		// Wildcard payee
-		txTmp.Outputs = nil
-
-		// Let the others update at will
-		for i := 0; i < len(txTmp.Inputs); i++ {
+	switch hashType & sigHashMask {
+	case txscript.SigHashNone:
+		txCopy.Outputs = txCopy.Outputs[0:0] // Empty slice.
+		for i := range txCopy.Inputs {
 			if i != idx {
-				txTmp.Inputs[i].Sequence = 0
+				txCopy.Inputs[i].Sequence = 0
 			}
 		}
-	} else if (hashType & 0x1f) == txscript.SigHashSingle {
-		// Only lock-in the txout payee at same index as txin
-		nOut := idx
-		if nOut >= len(txTmp.Outputs) {
-			return one[:], nil
-		}
-		txTmp.Outputs = txTmp.Outputs[:nOut+1]
-		for i := 0; i < nOut; i++ {
-			txTmp.Outputs[i] = Output{}
+
+	case txscript.SigHashSingle:
+		if idx >= len(tx.Outputs) {
+			//  nOut out of range
+			return nil, fmt.Errorf("no matching output for SIGHASH_SINGLE")
 		}
 
-		// Let the others update at will
-		for i := 0; i < len(txTmp.Inputs); i++ {
+		// Resize output array to up to and including requested index.
+		txCopy.Outputs = txCopy.Outputs[:idx+1]
+
+		// All but current output get zeroed out.
+		for i := 0; i < idx; i++ {
+			txCopy.Outputs[i].Value = -1
+			txCopy.Outputs[i].ScriptPubKey = nil
+		}
+
+		// Sequence on all other inputs is 0, too.
+		for i := range txCopy.Inputs {
 			if i != idx {
-				txTmp.Inputs[i].Sequence = 0
+				txCopy.Inputs[i].Sequence = 0
 			}
 		}
+
+	default:
+		// Consensus treats undefined hashtypes like normal SigHashAll
+		// for purposes of hash generation.
+		fallthrough
+	case txscript.SigHashOld:
+		fallthrough
+	case txscript.SigHashAll:
+		// Nothing special here.
 	}
 
 	// Blank out other inputs completely, not recommended for open transactions
-	if hashType&txscript.SigHashAnyOneCanPay > 0 {
-		txTmp.Inputs = []Input{txTmp.Inputs[idx]}
+	if hashType&txscript.SigHashAnyOneCanPay != 0 {
+		txCopy.Inputs = txCopy.Inputs[idx : idx+1]
 	}
 
 	// Blank out the joinsplit signature.
-	txTmp.JoinSplitSignature = [64]byte{}
+	txCopy.JoinSplitSignature = [64]byte{}
 
 	// Serialize and hash
-	txBin, err := txTmp.MarshalBinary()
-	if err != nil {
-		return nil, err
-	}
-	return sha256.New().Sum(append(txBin, byte(hashType))), nil
+	fmt.Printf("[DEBUG] hashing tx: %#v\n", txCopy)
+	buf := &bytes.Buffer{}
+	txCopy.WriteTo(buf)
+	binary.Write(buf, binary.LittleEndian, hashType)
+	fmt.Printf("[DEBUG] hashing data: %q\n", hex.EncodeToString(buf.Bytes()))
+	return chainhash.DoubleHashB(buf.Bytes()), nil
 }
 
 // shallowCopy creates a shallow copy of the transaction for use when

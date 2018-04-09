@@ -11,6 +11,7 @@ import (
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/txscript"
 	"github.com/btcsuite/btcd/wire"
+	"github.com/d4l3k/messagediff"
 )
 
 func byteSlice32(t *testing.T) (b [32]byte) {
@@ -166,6 +167,10 @@ func TestSerializationWithRandomTransactions(t *testing.T) {
 			}
 			if !got.IsEqual(txn) {
 				t.Fatalf("\nExpected: %#v\n     Got: %#v", *txn, got)
+			}
+			diff, equal := messagediff.PrettyDiff(*txn, got)
+			if !equal {
+				t.Fatalf(diff)
 			}
 		})
 	}
