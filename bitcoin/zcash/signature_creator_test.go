@@ -119,7 +119,7 @@ func RandomTransaction(t *testing.T, fSingle bool, consensusBranchID uint32) *Tr
 		}
 	}
 	if randBool() {
-		tx.Timestamp = time.Unix(rand.Int63(), 0)
+		tx.Timestamp = time.Unix(int64(rand.Uint32()), 0).UTC()
 	}
 	ins := rand.Intn(4) + 1
 	outs := rand.Intn(4) + 1
@@ -155,6 +155,8 @@ func RandomTransaction(t *testing.T, fSingle bool, consensusBranchID uint32) *Tr
 			jsdesc.Anchor = randHash(t)
 			jsdesc.Nullifiers[0] = randHash(t)
 			jsdesc.Nullifiers[1] = randHash(t)
+			jsdesc.Commitments[0] = randHash(t)
+			jsdesc.Commitments[1] = randHash(t)
 			jsdesc.EphemeralKey = randHash(t)
 			jsdesc.RandomSeed = randHash(t)
 			for _, ciphertext := range jsdesc.Ciphertexts {
@@ -167,24 +169,25 @@ func RandomTransaction(t *testing.T, fSingle bool, consensusBranchID uint32) *Tr
 			jsdesc.Macs[1] = randHash(t)
 			tx.JoinSplits = append(tx.JoinSplits, jsdesc)
 		}
+		if joinSplits > 0 {
+			// Generate a new keypair
+			joinSplitPrivKey, err := btcec.NewPrivateKey(btcec.S256())
+			if err != nil {
+				t.Fatal(err)
+			}
+			copy(tx.JoinSplitPubKey[:], joinSplitPrivKey.PubKey().SerializeCompressed())
 
-		// Generate a new keypair
-		joinSplitPrivKey, err := btcec.NewPrivateKey(btcec.S256())
-		if err != nil {
-			t.Fatal(err)
+			// Empty output script.
+			dataToBeSigned, err := SignatureHash(nil, tx, NotAnInput, txscript.SigHashAll, tx.VersionGroupID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			signature, err := joinSplitPrivKey.Sign(dataToBeSigned)
+			if err != nil {
+				t.Fatal(err)
+			}
+			copy(tx.JoinSplitSignature[:], signature.Serialize())
 		}
-		copy(tx.JoinSplitPubKey[:], joinSplitPrivKey.PubKey().SerializeCompressed())
-
-		// Empty output script.
-		dataToBeSigned, err := SignatureHash(nil, tx, NotAnInput, txscript.SigHashAll, tx.VersionGroupID)
-		if err != nil {
-			t.Fatal(err)
-		}
-		signature, err := joinSplitPrivKey.Sign(dataToBeSigned)
-		if err != nil {
-			t.Fatal(err)
-		}
-		copy(tx.JoinSplitSignature[:], signature.Serialize())
 	}
 	return tx
 }

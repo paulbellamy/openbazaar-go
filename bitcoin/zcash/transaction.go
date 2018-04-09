@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"reflect"
 	"time"
 
 	"github.com/btcsuite/btcd/blockchain"
@@ -83,13 +84,19 @@ func (t *Transaction) IsEqual(other *Transaction) bool {
 		return false
 	case t.VersionGroupID != other.VersionGroupID:
 		return false
-	case t.Timestamp != other.Timestamp:
+	case !t.Timestamp.Equal(other.Timestamp):
 		return false
 	case t.ExpiryHeight != other.ExpiryHeight:
+		return false
+	case string(t.JoinSplitPubKey[:]) != string(other.JoinSplitPubKey[:]):
+		return false
+	case string(t.JoinSplitSignature[:]) != string(other.JoinSplitSignature[:]):
 		return false
 	case len(t.Inputs) != len(other.Inputs):
 		return false
 	case len(t.Outputs) != len(other.Outputs):
+		return false
+	case len(t.JoinSplits) != len(other.JoinSplits):
 		return false
 	}
 	for i := range t.Inputs {
@@ -99,6 +106,11 @@ func (t *Transaction) IsEqual(other *Transaction) bool {
 	}
 	for i := range t.Outputs {
 		if !t.Outputs[i].IsEqual(other.Outputs[i]) {
+			return false
+		}
+	}
+	for i := range t.JoinSplits {
+		if !t.JoinSplits[i].IsEqual(other.JoinSplits[i]) {
 			return false
 		}
 	}
@@ -137,12 +149,9 @@ func (t *Transaction) readVersion(r io.Reader) error {
 		return err
 	}
 	t.IsOverwinter = (t.Version & OverwinterFlagMask) > 0
-	fmt.Printf("[DEBUG] readVersion: %d, isOverwinter: %v\n", t.Version, t.IsOverwinter)
 	if t.IsOverwinter {
 		t.Version = t.Version &^ OverwinterFlagMask
 	}
-	t.Version = 1
-	t.IsOverwinter = false
 	return err
 }
 
@@ -150,7 +159,6 @@ func (t *Transaction) readVersionGroupID(r io.Reader) error {
 	if !t.IsOverwinter {
 		return nil
 	}
-	fmt.Printf("[DEBUG] readVersionGroupID\n")
 	return binary.Read(r, binary.LittleEndian, &t.VersionGroupID)
 }
 
@@ -159,7 +167,6 @@ func (t *Transaction) readInputs(r io.Reader) error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("[DEBUG] readInputs: %d\n", count)
 	if t.Version == 1 && count <= 0 {
 		return fmt.Errorf("txn must have transparent inputs")
 	}
@@ -174,7 +181,6 @@ func (t *Transaction) readInputs(r io.Reader) error {
 }
 
 func (t *Transaction) readOutputs(r io.Reader) error {
-	fmt.Printf("[DEBUG] readOutputs\n")
 	count, err := wire.ReadVarInt(r, 0)
 	if err != nil {
 		return err
@@ -197,7 +203,6 @@ func (t *Transaction) readOutputs(r io.Reader) error {
 // fieldName parameter is only used for the error message so it provides more
 // context in the error.
 func readScript(r io.Reader, fieldName string) ([]byte, error) {
-	fmt.Printf("[DEBUG] readScript\n")
 	count, err := wire.ReadVarInt(r, 0)
 	if err != nil {
 		return nil, err
@@ -221,12 +226,13 @@ func readScript(r io.Reader, fieldName string) ([]byte, error) {
 }
 
 func (t *Transaction) readTimestamp(r io.Reader) error {
-	fmt.Printf("[DEBUG] readTimestamp\n")
 	var timestamp uint32
 	if err := binary.Read(r, binary.LittleEndian, &timestamp); err != nil {
 		return err
 	}
-	t.Timestamp = time.Unix(int64(timestamp), 0).UTC()
+	if timestamp != 0 {
+		t.Timestamp = time.Unix(int64(timestamp), 0).UTC()
+	}
 	return nil
 }
 
@@ -234,7 +240,6 @@ func (t *Transaction) readExpiryHeight(r io.Reader) error {
 	if !t.IsOverwinter {
 		return nil
 	}
-	fmt.Printf("[DEBUG] readExpiryHeight\n")
 	return binary.Read(r, binary.LittleEndian, &t.ExpiryHeight)
 }
 
@@ -242,7 +247,6 @@ func (t *Transaction) readJoinSplits(r io.Reader) error {
 	if t.Version <= 1 {
 		return nil
 	}
-	fmt.Printf("[DEBUG] readJoinSplits\n")
 	count, err := wire.ReadVarInt(r, 0)
 	if err != nil {
 		return err
@@ -288,7 +292,7 @@ func (t *Transaction) WriteTo(w io.Writer) (n int64, err error) {
 		writeIf(t.IsOverwinter, writeField(t.VersionGroupID)),
 		t.writeInputs,
 		t.writeOutputs,
-		writeField(uint32(t.Timestamp.Unix())),
+		t.writeTimestamp,
 		writeIf(t.IsOverwinter, writeField(t.ExpiryHeight)),
 		writeIf(t.Version >= 2, t.writeJoinSplits),
 		writeIf(t.Version >= 2 && len(t.JoinSplits) > 0, writeBytes(t.JoinSplitPubKey[:])),
@@ -306,6 +310,15 @@ func (t *Transaction) GetHeader() uint32 {
 		return t.Version | OverwinterFlagMask
 	}
 	return t.Version
+}
+
+// writeTimestamp is needed because time.Time{}.Unix() overflows uint32
+func (t *Transaction) writeTimestamp(w io.Writer) error {
+	var timestamp uint32
+	if !t.Timestamp.IsZero() {
+		timestamp = uint32(t.Timestamp.Unix())
+	}
+	return writeField(timestamp)(w)
 }
 
 func (t *Transaction) writeInputs(w io.Writer) error {
@@ -727,6 +740,10 @@ type JoinSplit struct {
 	Ciphertexts [NumJoinSplitOutputs][601]byte
 }
 
+func (js JoinSplit) IsEqual(other JoinSplit) bool {
+	return reflect.DeepEqual(js, other)
+}
+
 func (js *JoinSplit) ReadFrom(r io.Reader) (int64, error) {
 	counter := &countingReader{Reader: r}
 	for _, segment := range []func(io.Reader) error{
@@ -772,10 +789,11 @@ func readBytes(b []byte) func(r io.Reader) error {
 
 func readByteArray32(a [][32]byte) func(r io.Reader) error {
 	return func(r io.Reader) error {
-		for _, x := range a {
+		for i, x := range a {
 			if _, err := io.ReadFull(r, x[:]); err != nil {
 				return err
 			}
+			a[i] = x // x is a copy, so we have to set it back
 		}
 		return nil
 	}
@@ -839,6 +857,7 @@ func writeByteArray32(a [][32]byte) func(w io.Writer) error {
 		for _, x := range a {
 			if _, err := w.Write(x[:]); err != nil {
 				return err
+
 			}
 		}
 		return nil

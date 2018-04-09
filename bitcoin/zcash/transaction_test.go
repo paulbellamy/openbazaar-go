@@ -1,12 +1,15 @@
 package zcash
 
 import (
-	"crypto/rand"
+	"encoding/hex"
+	"fmt"
 	"math"
+	"math/rand"
 	"testing"
 	"time"
 
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
+	"github.com/btcsuite/btcd/txscript"
 	"github.com/btcsuite/btcd/wire"
 )
 
@@ -136,6 +139,33 @@ func TestSerialization(t *testing.T) {
 			}
 			if !got.IsEqual(&tc.txn) {
 				t.Fatalf("\nExpected: %+v\n     Got: %+v", tc.txn, got)
+			}
+		})
+	}
+}
+
+func TestSerializationWithRandomTransactions(t *testing.T) {
+	for i := 0; i < 500; i++ {
+		nHashType := txscript.SigHashType(rand.Int())
+		var consensusBranchID uint32
+		if randBool() {
+			consensusBranchID = SproutVersionGroupID
+		} else {
+			consensusBranchID = OverwinterVersionGroupID
+		}
+		txn := RandomTransaction(t, (nHashType&0x1f) == txscript.SigHashSingle, consensusBranchID)
+		t.Run(fmt.Sprint(i), func(t *testing.T) {
+			b, err := txn.MarshalBinary()
+			if err != nil {
+				t.Fatalf("error encoding transaction: %v", err)
+			}
+			t.Logf("Encoded: %v", hex.EncodeToString(b))
+			var got Transaction
+			if err := got.UnmarshalBinary(b); err != nil {
+				t.Fatalf("error decoding transaction: %v", err)
+			}
+			if !got.IsEqual(txn) {
+				t.Fatalf("\nExpected: %#v\n     Got: %#v", *txn, got)
 			}
 		})
 	}
