@@ -26,7 +26,7 @@ import (
 )
 
 const (
-	OverwinterProtocolVersion = 170003
+	OverwinterProtocolVersion = 170005
 )
 
 var log = logging.MustGetLogger("zcash")
