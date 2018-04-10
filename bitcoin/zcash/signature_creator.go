@@ -311,14 +311,14 @@ func (tx Transaction) shallowCopy() Transaction {
 	txCopy.JoinSplitPubKey = [32]byte{}
 	txCopy.JoinSplitSignature = [64]byte{}
 
-	for i := range tx.Inputs {
-		txCopy.Inputs[i] = tx.Inputs[i]
+	for i, input := range tx.Inputs {
+		txCopy.Inputs[i] = input
 	}
-	for i := range tx.Outputs {
-		txCopy.Outputs[i] = tx.Outputs[i]
+	for i, output := range tx.Outputs {
+		txCopy.Outputs[i] = output
 	}
-	for i := range tx.JoinSplits {
-		txCopy.JoinSplits[i] = tx.JoinSplits[i]
+	for i, joinSplit := range tx.JoinSplits {
+		txCopy.JoinSplits[i] = joinSplit
 	}
 	copy(txCopy.JoinSplitPubKey[:], tx.JoinSplitPubKey[:])
 	copy(txCopy.JoinSplitSignature[:], tx.JoinSplitSignature[:])
