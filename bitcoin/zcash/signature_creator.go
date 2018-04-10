@@ -257,7 +257,7 @@ func sproutSignatureHash(scriptCode []byte, tx *Transaction, idx int, hashType t
 
 		// All but current output get zeroed out.
 		for i := 0; i < idx; i++ {
-			txCopy.Outputs[i].Value = -1
+			txCopy.Outputs[i].Value = 0
 			txCopy.Outputs[i].ScriptPubKey = nil
 		}
 
