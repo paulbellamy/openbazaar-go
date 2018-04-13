@@ -57,10 +57,8 @@ func TestSigHashWithRandomTransactions(t *testing.T) {
 	if *printSigHashJSON {
 		nRandomTests = 500
 	}
-	nRandomTests = 634
 	for i := 0; i < nRandomTests; i++ {
 		t.Run(fmt.Sprint(i), func(t *testing.T) {
-			fmt.Printf("[DEBUG] TEST CASE %d\n", i)
 			nHashType := txscript.SigHashType(rand.Int())
 			var consensusBranchID uint32
 			if randBool() {
@@ -260,7 +258,7 @@ func SignatureHashOld(scriptCode []byte, txTo *Transaction, nIn int, nHashType t
 		}
 		txTmp.Outputs = txTmp.Outputs[:nOut+1]
 		for i := 0; i < nOut; i++ {
-			txTmp.Outputs[i] = Output{}
+			txTmp.Outputs[i] = Output{Value: -1}
 		}
 
 		// Let the others update at will
@@ -289,11 +287,7 @@ func SignatureHashOld(scriptCode []byte, txTo *Transaction, nIn int, nHashType t
 // Goal: check that SignatureHash generates correct hash
 func TestSigHashFromData(t *testing.T) {
 	for i, test := range testdata.SigHash {
-		if i != 496 {
-			continue
-		}
 		t.Run(fmt.Sprint(i), func(t *testing.T) {
-			fmt.Printf("[DEBUG] Test: %#v\n", test)
 			var tx Transaction
 			if err := tx.UnmarshalBinary(test.Raw(t)); err != nil {
 				t.Fatal(err)
@@ -306,17 +300,25 @@ func TestSigHashFromData(t *testing.T) {
 				t.Fatalf("Bad test, couldn't deserialize data: %v, got %#v", err, tx)
 			}
 
-			fmt.Printf("[DEBUG] Unmarshalled txn: %#v\n", tx)
 			sh, err := SignatureHash(test.Script(t), &tx, test.Index, test.HashType(), test.ConsensusBranchID())
 			if err != nil {
 				t.Error(err)
 				return
 			}
-			if string(sh) != string(test.Result(t)) {
-				t.Errorf("Signatures not equal.\nExpected: %q\n     Got: %q", hex.EncodeToString(test.Result(t)), hex.EncodeToString(sh))
+
+			if ToHex(sh) != test.Result {
+				t.Errorf("Signatures not equal.\nExpected: %q\n     Got: %q", test.Result, ToHex(sh))
 			}
 		})
 	}
+}
+
+func ToHex(data []byte) string {
+	var psz string
+	for i := 0; i < len(data); i++ {
+		psz += fmt.Sprintf("%02x", data[len(data)-i-1])
+	}
+	return psz
 }
 
 func validateTestData(tx Transaction) error {

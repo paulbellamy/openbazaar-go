@@ -3,7 +3,6 @@ package zcash
 import (
 	"bytes"
 	"encoding/binary"
-	"encoding/hex"
 	"fmt"
 	"gx/ipfs/QmaPHkZLbQQbvcyavn8q1GFHg6o6yeceyHFSJ3Pjf3p3TQ/go-crypto/blake2b"
 
@@ -216,18 +215,11 @@ func overwinterSignatureHash(scriptCode []byte, tx *Transaction, idx int, hashTy
 const sigHashMask = 0x1f
 
 func sproutSignatureHash(scriptCode []byte, tx *Transaction, idx int, hashType txscript.SigHashType) ([]byte, error) {
-	fmt.Printf("[DEBUG] sproutSignatureHash(%q, tx, %v, %q)\n", hex.EncodeToString(scriptCode), idx, hashType)
 	var one chainhash.Hash
 	one[0] = 0x01
 	if idx >= len(tx.Inputs) || idx == NotAnInput {
 		return one[:], nil
 	}
-
-	disasmScript, err := txscript.DisasmString(scriptCode)
-	if err != nil {
-		panic(err)
-	}
-	fmt.Printf("[DEBUG] Disassembled script: %q\n", disasmScript)
 
 	txCopy := tx.shallowCopy()
 
@@ -257,7 +249,7 @@ func sproutSignatureHash(scriptCode []byte, tx *Transaction, idx int, hashType t
 
 		// All but current output get zeroed out.
 		for i := 0; i < idx; i++ {
-			txCopy.Outputs[i].Value = 0
+			txCopy.Outputs[i].Value = -1
 			txCopy.Outputs[i].ScriptPubKey = nil
 		}
 
@@ -287,11 +279,9 @@ func sproutSignatureHash(scriptCode []byte, tx *Transaction, idx int, hashType t
 	txCopy.JoinSplitSignature = [64]byte{}
 
 	// Serialize and hash
-	fmt.Printf("[DEBUG] hashing tx: %#v\n", txCopy)
 	buf := &bytes.Buffer{}
 	txCopy.WriteTo(buf)
 	binary.Write(buf, binary.LittleEndian, hashType)
-	fmt.Printf("[DEBUG] hashing data: %q\n", hex.EncodeToString(buf.Bytes()))
 	return chainhash.DoubleHashB(buf.Bytes()), nil
 }
 
