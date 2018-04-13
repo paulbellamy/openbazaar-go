@@ -245,7 +245,7 @@ func TestTxStoreIngestRejectsInvalidTxns(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	expectedErr := "transaction version must be greater than 0"
+	expectedErr := ErrTxVersionTooLow.Error()
 	txn := &Transaction{Version: 0, Inputs: []Input{{}}, Outputs: []Output{{}}}
 	if _, err := txStore.Ingest(txn, nil, 1); err == nil {
 		t.Errorf("Did not reject invalid txn")

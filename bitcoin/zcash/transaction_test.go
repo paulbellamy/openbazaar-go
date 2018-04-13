@@ -182,12 +182,8 @@ func TestTransactionValidate(t *testing.T) {
 		txn *Transaction
 	}{
 		{
-			err: "transaction version must be greater than 0",
+			err: "transaction version too low",
 			txn: &Transaction{Version: 0, Inputs: []Input{{}}, Outputs: []Output{{}}},
-		},
-		{
-			err: "transaction version must be less than 3",
-			txn: &Transaction{Version: 3, Inputs: []Input{{}}, Outputs: []Output{{}}},
 		},
 		{
 			err: "transaction has no inputs",
@@ -198,7 +194,7 @@ func TestTransactionValidate(t *testing.T) {
 			txn: &Transaction{Version: 1, Inputs: []Input{{}}},
 		},
 		{
-			err: "overwinter transaction version must be 3",
+			err: "overwinter transaction version too low",
 			txn: &Transaction{IsOverwinter: true, Version: 2, Inputs: []Input{{}}, Outputs: []Output{{}}},
 		},
 		{
@@ -206,7 +202,7 @@ func TestTransactionValidate(t *testing.T) {
 			txn: &Transaction{IsOverwinter: true, Version: 3, VersionGroupID: 9999, Inputs: []Input{{}}, Outputs: []Output{{}}},
 		},
 		{
-			err: "transaction with coinbase input must have no transparent outputs",
+			err: "coinbase transaction has outputs",
 			txn: &Transaction{
 				Version: 1,
 				Inputs: []Input{
