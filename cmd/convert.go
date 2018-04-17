@@ -47,7 +47,7 @@ func (x *Convert) Execute(args []string) error {
 		fmt.Fprintf(os.Stderr, "When converting to zcash please specify the path to the zcash binary. Example:\nopenbazaar-go convert zcash /path/to/zcashd\n")
 		return nil
 	}
-	if !(strings.ToLower(args[0]) == "bitcoin" || strings.ToLower(args[0]) == "bitcoincash" || strings.ToLower(args[0]) == "zcash" || string.ToLower(args[0]) == "zcash-light") {
+	if !(strings.ToLower(args[0]) == "bitcoin" || strings.ToLower(args[0]) == "bitcoincash" || strings.ToLower(args[0]) == "zcash" || strings.ToLower(args[0]) == "zcash-light") {
 		fmt.Fprintf(os.Stderr, "Unknown currency type: please enter either bitcoin, bitcoincash, zcash, or zcash-light.\n")
 		return nil
 	}
