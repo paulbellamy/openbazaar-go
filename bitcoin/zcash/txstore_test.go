@@ -326,8 +326,8 @@ func TestTxStoreIngestOnlyStoresRelevantTxns(t *testing.T) {
 	if len(keys) == 0 {
 		t.Fatal(err)
 	}
-	// random address
-	address, err := keyToAddress(keys[0], config.Params)
+	// random testnet address
+	address, err := DecodeAddress("tmD8E94EC75EbRGWYWAEMU48Gmm1bJmkp3m", config.Params)
 	script, err := PayToAddrScript(address)
 	if err != nil {
 		t.Fatal(err)
