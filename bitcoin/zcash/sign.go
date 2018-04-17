@@ -172,7 +172,7 @@ func (t *Transaction) ToWireMsgTx() (*wire.MsgTx, error) {
 type InputSource func(target btc.Amount) (total btc.Amount, inputs []Input, scripts [][]byte, err error)
 
 // NewUnsignedTransaction is reused from spvwallet and modified to be less btc-specific
-func NewUnsignedTransaction(outputs []Output, feePerKb btc.Amount, fetchInputs InputSource, fetchChange txauthor.ChangeSource) (*Transaction, error) {
+func NewUnsignedTransaction(outputs []Output, feePerKb btc.Amount, fetchInputs InputSource, fetchChange txauthor.ChangeSource, isOverwinter bool) (*Transaction, error) {
 
 	var targetAmount btc.Amount
 	for _, output := range outputs {
@@ -200,10 +200,15 @@ func NewUnsignedTransaction(outputs []Output, feePerKb btc.Amount, fetchInputs I
 		}
 
 		unsignedTransaction := &Transaction{
-			Version:   1,
-			Inputs:    inputs,
-			Outputs:   outputs,
-			Timestamp: time.Time{},
+			IsOverwinter: isOverwinter,
+			Version:      1,
+			Inputs:       inputs,
+			Outputs:      outputs,
+			Timestamp:    time.Now().UTC(),
+		}
+		if isOverwinter {
+			unsignedTransaction.Version = 3
+			unsignedTransaction.VersionGroupID = OverwinterVersionGroupID
 		}
 		changeAmount := inputAmount - targetAmount - maxRequiredFee
 		if changeAmount != 0 && !txrules.IsDustAmount(changeAmount,

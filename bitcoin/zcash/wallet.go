@@ -454,7 +454,7 @@ func (w *Wallet) buildTxn(amount int64, addr btc.Address, feeLevel wallet.FeeLev
 		return script, nil
 	}
 
-	authoredTx, err := NewUnsignedTransaction(outputs, btc.Amount(feePerKB), inputSource, changeSource)
+	authoredTx, err := NewUnsignedTransaction(outputs, btc.Amount(feePerKB), inputSource, changeSource, w.isOverwinter)
 	if err != nil {
 		return nil, err
 	}
