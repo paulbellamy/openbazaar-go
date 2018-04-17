@@ -361,14 +361,16 @@ func (i *InsightClient) Broadcast(tx []byte) (string, error) {
 	t := RawTx{txHex}
 	txJson, err := json.Marshal(&t)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("error encoding transaction: %s", err)
 	}
 	resp, err := i.doRequest("tx/send", http.MethodPost, bytes.NewBuffer(txJson), nil)
-	decoder := json.NewDecoder(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("error broadcasting transaction: %s", err)
+	}
 	txid := new(Transaction)
 	defer resp.Body.Close()
-	if err = decoder.Decode(txid); err != nil {
-		return "", fmt.Errorf("error decoding utxo list: %s\n", err)
+	if err = json.NewDecoder(resp.Body).Decode(txid); err != nil {
+		return "", fmt.Errorf("error decoding utxo list: %s", err)
 	}
 	return txid.Txid, nil
 }
