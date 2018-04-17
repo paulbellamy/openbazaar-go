@@ -151,45 +151,11 @@ func (w *Wallet) onTxn(txn client.Transaction) error {
 	if err != nil {
 		return err
 	}
-	msgTx := &Transaction{
-		Version:   uint32(txn.Version),
-		Inputs:    make([]Input, len(txn.Inputs)),
-		Outputs:   make([]Output, len(txn.Outputs)),
-		Timestamp: time.Unix(txn.Time, 0),
+	var tx Transaction
+	if err := tx.UnmarshalBinary(raw); err != nil {
+		return err
 	}
-	for i, input := range txn.Inputs {
-		hash, err := chainhash.NewHashFromStr(input.Txid)
-		if err != nil {
-			return err
-		}
-		sigScript, err := hex.DecodeString(input.ScriptSig.Hex)
-		if err != nil {
-			return err
-		}
-		msgTx.Inputs[i] = Input{
-			PreviousOutPoint: wire.OutPoint{
-				Hash:  *hash,
-				Index: uint32(input.Vout),
-			},
-			SignatureScript: sigScript,
-			Sequence:        uint32(input.Sequence),
-		}
-	}
-	for i, output := range txn.Outputs {
-		value, err := output.ValueSat()
-		if err != nil {
-			return err
-		}
-		pkScript, err := hex.DecodeString(output.ScriptPubKey.Hex)
-		if err != nil {
-			return err
-		}
-		msgTx.Outputs[i] = Output{
-			Value:        value,
-			ScriptPubKey: pkScript,
-		}
-	}
-	_, err = w.txStore.Ingest(msgTx, raw, int32(txn.BlockHeight))
+	_, err = w.txStore.Ingest(&tx, raw, int32(txn.BlockHeight))
 	return err
 }
 

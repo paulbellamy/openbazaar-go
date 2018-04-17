@@ -156,7 +156,7 @@ func (i *InsightClient) GetRawTransaction(txid string) ([]byte, error) {
 	if err = json.NewDecoder(resp.Body).Decode(tx); err != nil {
 		return nil, fmt.Errorf("error decoding transactions: %s\n", err)
 	}
-	return []byte(tx.RawTx), nil
+	return hex.DecodeString(tx.RawTx)
 }
 
 func (i *InsightClient) GetTransactions(addrs []btcutil.Address) ([]Transaction, error) {
