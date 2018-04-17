@@ -280,6 +280,7 @@ func (w *Wallet) NewAddress(purpose wallet.KeyPurpose) btc.Address {
 	addr, _ := keyToAddress(key, w.Params())
 	w.DB.Keys().MarkKeyAsUsed(addr.ScriptAddress())
 	w.addWatchedAddr(addr)
+	w.txStore.PopulateAdrs()
 	return addr
 }
 
@@ -1008,6 +1009,8 @@ func (w *Wallet) ReSyncBlockchain(fromDate time.Time) {
 			log.Errorf("error resyncing blockchain: %v", err)
 		}
 	}
+
+	w.txStore.PopulateAdrs()
 
 	// reload them all
 	w.loadInitialTransactions()

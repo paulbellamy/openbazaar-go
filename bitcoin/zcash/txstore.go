@@ -2,7 +2,6 @@ package zcash
 
 import (
 	"bytes"
-	"errors"
 	"sync"
 	"time"
 
@@ -10,7 +9,6 @@ import (
 	"github.com/OpenBazaar/wallet-interface"
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
-	"github.com/btcsuite/btcd/txscript"
 	"github.com/btcsuite/btcd/wire"
 	"github.com/btcsuite/btcutil"
 )
@@ -81,7 +79,7 @@ func (ts *TxStore) Ingest(tx *Transaction, raw []byte, height int32) (uint32, er
 	for i := range ts.adrs {
 		// Iterate through all our addresses
 		// TODO: This will need to test both segwit and legacy once segwit activates
-		PKscripts[i], err = txscript.PayToAddrScript(ts.adrs[i])
+		PKscripts[i], err = PayToAddrScript(ts.adrs[i])
 		if err != nil {
 			return hits, err
 		}
@@ -265,7 +263,7 @@ func (ts *TxStore) PopulateAdrs() error {
 	ts.addrMutex.Lock()
 	ts.adrs = []btcutil.Address{}
 	for _, k := range keys {
-		addr, err := k.Address(ts.params)
+		addr, err := keyToAddress(k, ts.params)
 		if err != nil {
 			continue
 		}
@@ -356,14 +354,11 @@ func (ts *TxStore) processReorg(lastGoodHeight uint32) error {
 }
 
 func (ts *TxStore) extractScriptAddress(script []byte) ([]byte, error) {
-	_, addrs, _, err := txscript.ExtractPkScriptAddrs(script, ts.params)
+	addr, err := ExtractPkScriptAddrs(script, ts.params)
 	if err != nil {
 		return nil, err
 	}
-	if len(addrs) == 0 {
-		return nil, errors.New("unknown script")
-	}
-	return addrs[0].ScriptAddress(), nil
+	return addr.ScriptAddress(), nil
 }
 
 func outPointsEqual(a, b wire.OutPoint) bool {
