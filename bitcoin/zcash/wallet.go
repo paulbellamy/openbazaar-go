@@ -479,7 +479,7 @@ func (w *Wallet) buildTxn(amount int64, addr btc.Address, feeLevel wallet.FeeLev
 		if err != nil {
 			return nil, fmt.Errorf("failed to sign transaction: %v", err)
 		}
-		input.SignatureScript = signature
+		authoredTx.Inputs[i].SignatureScript = signature
 	}
 	return authoredTx, nil
 }
