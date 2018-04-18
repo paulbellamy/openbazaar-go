@@ -140,10 +140,12 @@ func (w *Wallet) MainNetworkEnabled() bool {
 }
 
 func (w *Wallet) Start() {
-	w.subscribeToAllAddresses()
-	w.loadInitialTransactions()
-	go w.watchTransactions()
-	close(w.initChan)
+	go func() {
+		w.subscribeToAllAddresses()
+		w.loadInitialTransactions()
+		go w.watchTransactions()
+		close(w.initChan)
+	}()
 }
 
 func (w *Wallet) onTxn(txn client.Transaction) error {
