@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"math/rand"
 	"testing"
-	"time"
 
 	"github.com/OpenBazaar/openbazaar-go/bitcoin/zcash/testdata"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
@@ -130,7 +129,7 @@ func RandomTransaction(t *testing.T, fSingle bool, consensusBranchID uint32) *Tr
 		}
 	}
 	if randBool() {
-		tx.Timestamp = time.Unix(int64(rand.Uint32()), 0).UTC()
+		tx.LockTime = rand.Uint32()
 	}
 	ins := rand.Intn(4) + 1
 	outs := rand.Intn(4) + 1

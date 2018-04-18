@@ -3,7 +3,6 @@ package zcash
 import (
 	"errors"
 	"fmt"
-	"time"
 
 	"github.com/OpenBazaar/spvwallet"
 	"github.com/btcsuite/btcd/chaincfg"
@@ -151,7 +150,7 @@ func (t *Transaction) ToWireMsgTx() (*wire.MsgTx, error) {
 		Version:  int32(t.Version),
 		TxIn:     make([]*wire.TxIn, len(t.Inputs)),
 		TxOut:    make([]*wire.TxOut, len(t.Outputs)),
-		LockTime: uint32(t.Timestamp.Unix()),
+		LockTime: t.LockTime,
 	}
 	for i, input := range t.Inputs {
 		msgTx.TxIn[i] = &wire.TxIn{
@@ -204,7 +203,6 @@ func NewUnsignedTransaction(outputs []Output, feePerKb btc.Amount, fetchInputs I
 			Version:      1,
 			Inputs:       inputs,
 			Outputs:      outputs,
-			Timestamp:    time.Now().UTC(),
 		}
 		if isOverwinter {
 			unsignedTransaction.Version = 3

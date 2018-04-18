@@ -29,7 +29,7 @@ func byteSlice64(t *testing.T) (b [64]byte) {
 }
 
 func TestSerialization(t *testing.T) {
-	now := time.Now().UTC().Truncate(1 * time.Second)
+	now := uint32(time.Now().UTC().Truncate(1 * time.Second).Unix())
 	hash, _ := chainhash.NewHashFromStr("a")
 
 	var randomProof [296]byte
@@ -51,17 +51,16 @@ func TestSerialization(t *testing.T) {
 		{
 			name: "empty v1",
 			txn: Transaction{
-				Version:   1,
-				Timestamp: now,
-				Inputs:    []Input{{}},
-				Outputs:   []Output{},
+				Version: 1,
+				Inputs:  []Input{{}},
+				Outputs: []Output{},
 			},
 		},
 		{
 			name: "v1",
 			txn: Transaction{
-				Version:   1,
-				Timestamp: now,
+				Version:  1,
+				LockTime: now,
 				Inputs: []Input{
 					{PreviousOutPoint: wire.OutPoint{*hash, 1}, SignatureScript: []byte("signatureScript"), Sequence: 9},
 				},
@@ -73,10 +72,10 @@ func TestSerialization(t *testing.T) {
 		{
 			name: "v2",
 			txn: Transaction{
-				Version:   2,
-				Timestamp: now,
-				Inputs:    []Input{},
-				Outputs:   []Output{},
+				Version:  2,
+				LockTime: now,
+				Inputs:   []Input{},
+				Outputs:  []Output{},
 				JoinSplits: []JoinSplit{
 					{
 						VPubOld:      1234,
@@ -101,7 +100,6 @@ func TestSerialization(t *testing.T) {
 				IsOverwinter:   true,
 				Version:        3,
 				VersionGroupID: OverwinterVersionGroupID,
-				Timestamp:      now,
 				Inputs: []Input{
 					{PreviousOutPoint: wire.OutPoint{*hash, 1}, SignatureScript: []byte("signatureScript"), Sequence: 9},
 				},
@@ -116,7 +114,7 @@ func TestSerialization(t *testing.T) {
 				IsOverwinter:   true,
 				Version:        3,
 				VersionGroupID: OverwinterVersionGroupID,
-				Timestamp:      now,
+				LockTime:       now,
 				ExpiryHeight:   99,
 				Inputs: []Input{
 					{PreviousOutPoint: wire.OutPoint{*hash, 1}, SignatureScript: []byte("signatureScript"), Sequence: 9},

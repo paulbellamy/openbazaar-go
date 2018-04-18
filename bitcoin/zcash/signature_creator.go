@@ -181,7 +181,7 @@ func overwinterSignatureHash(scriptCode []byte, tx *Transaction, idx int, hashTy
 		// JoinSplits
 		hashJoinSplits,
 		// Locktime
-		uint32(tx.Timestamp.Unix()),
+		tx.LockTime,
 		// Expiry height
 		tx.ExpiryHeight,
 		// Sighash type

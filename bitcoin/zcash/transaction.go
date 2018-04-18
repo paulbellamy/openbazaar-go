@@ -7,7 +7,6 @@ import (
 	"io"
 	"math"
 	"reflect"
-	"time"
 
 	"github.com/btcsuite/btcd/blockchain"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
@@ -55,7 +54,7 @@ type Transaction struct {
 	VersionGroupID     uint32
 	Inputs             []Input
 	Outputs            []Output
-	Timestamp          time.Time
+	LockTime           uint32
 	ExpiryHeight       uint32
 	JoinSplits         []JoinSplit
 	JoinSplitPubKey    [32]byte
@@ -84,7 +83,7 @@ func (t *Transaction) IsEqual(other *Transaction) bool {
 		return false
 	case t.VersionGroupID != other.VersionGroupID:
 		return false
-	case !t.Timestamp.Equal(other.Timestamp):
+	case t.LockTime != other.LockTime:
 		return false
 	case t.ExpiryHeight != other.ExpiryHeight:
 		return false
@@ -129,7 +128,7 @@ func (t *Transaction) ReadFrom(r io.Reader) (n int64, err error) {
 		t.readVersionGroupID,
 		t.readInputs,
 		t.readOutputs,
-		t.readTimestamp,
+		readField(&t.LockTime),
 		t.readExpiryHeight,
 		t.readJoinSplits,
 		t.readJoinSplitPubKey,
@@ -225,17 +224,6 @@ func readScript(r io.Reader, fieldName string) ([]byte, error) {
 	return b, nil
 }
 
-func (t *Transaction) readTimestamp(r io.Reader) error {
-	var timestamp uint32
-	if err := binary.Read(r, binary.LittleEndian, &timestamp); err != nil {
-		return err
-	}
-	if timestamp != 0 {
-		t.Timestamp = time.Unix(int64(timestamp), 0).UTC()
-	}
-	return nil
-}
-
 func (t *Transaction) readExpiryHeight(r io.Reader) error {
 	if !t.IsOverwinter {
 		return nil
@@ -292,7 +280,7 @@ func (t *Transaction) WriteTo(w io.Writer) (n int64, err error) {
 		writeIf(t.IsOverwinter, writeField(t.VersionGroupID)),
 		t.writeInputs,
 		t.writeOutputs,
-		t.writeTimestamp,
+		writeField(t.LockTime),
 		writeIf(t.IsOverwinter, writeField(t.ExpiryHeight)),
 		writeIf(t.Version >= 2, t.writeJoinSplits),
 		writeIf(t.Version >= 2 && len(t.JoinSplits) > 0, writeBytes(t.JoinSplitPubKey[:])),
@@ -310,15 +298,6 @@ func (t *Transaction) GetHeader() uint32 {
 		return t.Version | OverwinterFlagMask
 	}
 	return t.Version
-}
-
-// writeTimestamp is needed because time.Time{}.Unix() overflows uint32
-func (t *Transaction) writeTimestamp(w io.Writer) error {
-	var timestamp uint32
-	if !t.Timestamp.IsZero() {
-		timestamp = uint32(t.Timestamp.Unix())
-	}
-	return writeField(timestamp)(w)
 }
 
 func (t *Transaction) writeInputs(w io.Writer) error {

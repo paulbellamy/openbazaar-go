@@ -698,10 +698,9 @@ func (w *Wallet) SweepAddress(utxos []wallet.Utxo, address *btc.Address, key *hd
 	out.Value = outVal
 
 	tx := &Transaction{
-		Version:   1,
-		Inputs:    inputs,
-		Outputs:   []Output{out},
-		Timestamp: time.Time{},
+		Version: 1,
+		Inputs:  inputs,
+		Outputs: []Output{out},
 	}
 
 	// BIP 69 sorting

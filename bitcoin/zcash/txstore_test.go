@@ -3,7 +3,6 @@ package zcash
 import (
 	"bytes"
 	"testing"
-	"time"
 
 	"github.com/OpenBazaar/multiwallet/keys"
 	wallet "github.com/OpenBazaar/wallet-interface"
@@ -190,7 +189,6 @@ func TestTxStoreIngestMarksExistingDoubleSpendsAsDead(t *testing.T) {
 		Outputs: []Output{
 			{Value: 123400000, ScriptPubKey: script},
 		},
-		Timestamp: time.Now().UTC(),
 	}
 	buf := &bytes.Buffer{}
 	if _, err := existingTxn.WriteTo(buf); err != nil {
