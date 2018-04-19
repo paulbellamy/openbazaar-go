@@ -11,6 +11,7 @@ import (
 	btc "github.com/btcsuite/btcutil"
 	"github.com/btcsuite/btcwallet/wallet/txauthor"
 	"github.com/btcsuite/btcwallet/wallet/txrules"
+	"github.com/conformal/btcec"
 )
 
 // Special case nIn for signing JoinSplits.
@@ -27,14 +28,6 @@ func ProduceSignature(
 	sdb txscript.ScriptDB,
 	previousScript []byte,
 ) ([]byte, error) {
-	if !tx.IsOverwinter {
-		msgTx, err := tx.ToWireMsgTx()
-		if err != nil {
-			return nil, err
-		}
-		return txscript.SignTxOutput(params, msgTx, idx, pkScript, hashType, kdb, sdb, previousScript)
-	}
-
 	creator := TransactionSignatureCreator(kdb, sdb, tx, idx, hashType)
 	results, _, ok := SignStep(params, creator, pkScript, tx.VersionGroupID)
 	if !ok {
@@ -145,35 +138,6 @@ func SignStep(params *chaincfg.Params, creator SignatureCreator, scriptPubKey []
 	default:
 		return nil, scriptClass, false
 	}
-}
-
-// ToWireMsgTx throws away some information to cram this in transaction into a
-// bitcoin-friendly format. So we can re-use some btc code for now.
-func (t *Transaction) ToWireMsgTx() (*wire.MsgTx, error) {
-	if t.Version != 1 || t.IsOverwinter || len(t.JoinSplits) > 0 {
-		return nil, fmt.Errorf("transaction cannot fit into bitcoin wire encoding")
-	}
-
-	msgTx := &wire.MsgTx{
-		Version:  int32(t.Version),
-		TxIn:     make([]*wire.TxIn, len(t.Inputs)),
-		TxOut:    make([]*wire.TxOut, len(t.Outputs)),
-		LockTime: t.LockTime,
-	}
-	for i, input := range t.Inputs {
-		msgTx.TxIn[i] = &wire.TxIn{
-			PreviousOutPoint: input.PreviousOutPoint,
-			SignatureScript:  input.SignatureScript,
-			Sequence:         input.Sequence,
-		}
-	}
-	for i, output := range t.Outputs {
-		msgTx.TxOut[i] = &wire.TxOut{
-			Value:    output.Value,
-			PkScript: output.ScriptPubKey,
-		}
-	}
-	return msgTx, nil
 }
 
 type InputSource func(target btc.Amount) (total btc.Amount, inputs []Input, scripts [][]byte, err error)
