@@ -268,7 +268,7 @@ func keyToAddress(key *hd.ExtendedKey, params *chaincfg.Params) (btc.Address, er
 	if err != nil {
 		return nil, err
 	}
-	return NewAddressPubKeyHash(btc.Hash160(pubkey.SerializeUncompressed()), params)
+	return NewAddressPubKeyHash(btc.Hash160(pubkey.SerializeCompressed()), params)
 }
 
 // Parse the address string and return an address interface
@@ -435,7 +435,7 @@ func (w *Wallet) buildTxn(amount int64, addr btc.Address, feeLevel wallet.FeeLev
 				continue
 			}
 			wif, _ := btc.NewWIF(privKey, w.Params(), true)
-			additionalKeysByAddress[hex.EncodeToString(addr.ScriptAddress())] = wif
+			additionalKeysByAddress[addr.EncodeAddress()] = wif
 		}
 		return total, inputs, scripts, nil
 	}
@@ -466,7 +466,7 @@ func (w *Wallet) buildTxn(amount int64, addr btc.Address, feeLevel wallet.FeeLev
 
 	// Sign tx
 	getKey := txscript.KeyClosure(func(addr btc.Address) (*btcec.PrivateKey, bool, error) {
-		wif := additionalKeysByAddress[hex.EncodeToString(addr.ScriptAddress())]
+		wif := additionalKeysByAddress[addr.EncodeAddress()]
 		return wif.PrivKey, wif.CompressPubKey, nil
 	})
 	getScript := txscript.ScriptClosure(func(
