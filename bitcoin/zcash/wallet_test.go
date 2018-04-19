@@ -2,12 +2,15 @@ package zcash
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"reflect"
 	"strings"
 	"testing"
 	"time"
 
+	"golang.org/x/crypto/ripemd160"
 	"golang.org/x/net/proxy"
 
 	"github.com/OpenBazaar/multiwallet/client"
@@ -16,6 +19,7 @@ import (
 	wallet "github.com/OpenBazaar/wallet-interface"
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
+	"github.com/btcsuite/btcd/txscript"
 	"github.com/btcsuite/btcd/wire"
 	btc "github.com/btcsuite/btcutil"
 	hd "github.com/btcsuite/btcutil/hdkeychain"
@@ -623,6 +627,34 @@ func TestWalletSpend(t *testing.T) {
 		if txn.Inputs[0].PreviousOutPoint.Index != utxo1.Op.Index {
 			t.Errorf("Expected input vout %d, got input vout: %d", utxo1.Op.Index, txn.Inputs[0].PreviousOutPoint.Index)
 		}
+
+		// Check the input signature hashes
+		expectedPubKeyHash := scriptPubkey[3:23]
+		// Check that the signature pubkey we're trying to use hashes to the expected
+		disasm, err := txscript.DisasmString(txn.Inputs[0].SignatureScript)
+		if err != nil {
+			t.Errorf("Invalid signature: %v", err)
+		}
+		parts := strings.Split(disasm, " ")
+		if len(parts) != 2 {
+			t.Errorf("Invalid signature: had %d parts", len(parts))
+		}
+		pkData, err := hex.DecodeString(parts[1])
+		if err != nil {
+			t.Errorf("Invalid signature: %v", err)
+		}
+		hash := sha256.Sum256(pkData)
+		ripe := ripemd160.New()
+		ripe.Write(hash[:])
+		got := ripe.Sum(nil)
+		if string(expectedPubKeyHash) != string(got) {
+			t.Errorf(
+				"\nExpected pubkeyhash: %q\n     Got pubkeyhash: %q",
+				hex.EncodeToString(expectedPubKeyHash),
+				hex.EncodeToString(got),
+			)
+		}
+
 	}
 
 	if len(txn.Outputs) != 2 {
