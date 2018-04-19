@@ -289,7 +289,7 @@ func (w *Wallet) AddressToScript(addr btc.Address) ([]byte, error) {
 // Returns if the wallet has the key for the given address
 func (w *Wallet) HasKey(addr btc.Address) bool {
 	<-w.initChan
-	_, err := w.hdKeyForAddress(addr)
+	_, err := w.keyManager.GetKeyForScript(addr.ScriptAddress())
 	return err == nil
 }
 
@@ -504,7 +504,7 @@ func (w *Wallet) gatherCoins() (map[coinset.Coin]*hd.ExtendedKey, error) {
 		if err != nil {
 			return nil, err
 		}
-		hdKey, err := w.hdKeyForAddress(addr)
+		hdKey, err := w.keyManager.GetKeyForScript(addr.ScriptAddress())
 		if err != nil {
 			return nil, err
 		}
@@ -539,7 +539,7 @@ func (w *Wallet) BumpFee(txid chainhash.Hash) (*chainhash.Hash, error) {
 			if err != nil {
 				continue
 			}
-			hdKey, err := w.hdKeyForAddress(addr)
+			hdKey, err := w.keyManager.GetKeyForScript(addr.ScriptAddress())
 			if err != nil {
 				continue
 			}
@@ -552,26 +552,6 @@ func (w *Wallet) BumpFee(txid chainhash.Hash) (*chainhash.Hash, error) {
 		}
 	}
 	return nil, spvwallet.BumpFeeNotFoundError
-}
-
-func (w *Wallet) hdKeyForAddress(addr btc.Address) (*hd.ExtendedKey, error) {
-	privKey, err := w.keyManager.GetKeyForScript(addr.ScriptAddress())
-	if err != nil {
-		return nil, err
-	}
-	ecPrivKey, err := privKey.ECPrivKey()
-	if err != nil {
-		return nil, err
-	}
-	return hd.NewExtendedKey(
-		w.Params().HDPrivateKeyID[:],
-		ecPrivKey.Serialize(),
-		make([]byte, 32),
-		[]byte{0x00, 0x00, 0x00, 0x00},
-		0,
-		0,
-		true,
-	), nil
 }
 
 // Get the current fee per byte
