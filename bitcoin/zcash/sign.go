@@ -108,11 +108,19 @@ func SignStep(params *chaincfg.Params, creator SignatureCreator, scriptPubKey []
 		if !ok {
 			return nil, scriptClass, false
 		}
-		privKey, _, err := creator.GetKey(addr)
+		privKey, compressed, err := creator.GetKey(addr)
 		if err != nil {
 			return nil, scriptClass, false
 		}
-		return append([][]byte{sig}, privKey.PubKey().SerializeUncompressed()), scriptClass, true
+		pubKey := (*btcec.PublicKey)(&privKey.PublicKey)
+		var pkData []byte
+		if compressed {
+			pkData = pubKey.SerializeCompressed()
+		} else {
+			pkData = pubKey.SerializeUncompressed()
+		}
+
+		return append([][]byte{sig}, pkData), scriptClass, true
 
 	case txscript.ScriptHashTy:
 		scriptRet, err := creator.GetScript(addr)
