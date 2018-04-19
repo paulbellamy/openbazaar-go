@@ -493,7 +493,7 @@ func (w *Wallet) gatherCoins() (map[coinset.Coin]*hd.ExtendedKey, error) {
 		return m, err
 	}
 	for _, u := range utxos {
-		if u.AtHeight <= 0 || u.AtHeight >= int32(tipHeight) {
+		if u.WatchOnly || u.AtHeight <= 0 || u.AtHeight >= int32(tipHeight) {
 			// not yet mined, or zero confirmations, so not spendable
 			continue
 		}
