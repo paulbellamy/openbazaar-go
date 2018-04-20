@@ -321,18 +321,14 @@ func (w *Wallet) checkIfStxoIsConfirmed(utxo wallet.Utxo, stxos []wallet.Stxo) b
 		if !stxo.Utxo.WatchOnly {
 			if stxo.SpendTxid.IsEqual(&utxo.Op.Hash) {
 				if stxo.SpendHeight > 0 {
-					println("utxo", fmt.Sprint(utxo), "matched spent stxo:", fmt.Sprint(stxo), "utxo confirmed")
 					return true
 				} else {
-					println("utxo", fmt.Sprint(utxo), "matched unspent stxo:", fmt.Sprint(stxo), "recursing")
 					return w.checkIfStxoIsConfirmed(stxo.Utxo, stxos)
 				}
 			} else if stxo.Utxo.IsEqual(&utxo) {
 				if stxo.Utxo.AtHeight > 0 {
-					println("stxo.Utxo.AtHeight:", stxo.Utxo.AtHeight, "utxo confirmed")
 					return true
 				} else {
-					println("stxo.Utxo.AtHeight:", stxo.Utxo.AtHeight, "utxo unconfirmed")
 					return false
 				}
 			}
