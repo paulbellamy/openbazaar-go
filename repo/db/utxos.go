@@ -48,9 +48,10 @@ func (u *UtxoDB) GetAll() ([]wallet.Utxo, error) {
 	u.lock.Lock()
 	defer u.lock.Unlock()
 	var ret []wallet.Utxo
-	stm := "select outpoint, value, height, scriptPubKey, watchOnly from utxos"
-	rows, err := u.db.Query(stm)
-	if err != nil {
+	rows, err := u.db.Query("select outpoint, value, height, scriptPubKey, watchOnly from utxos")
+	if err == sql.ErrNoRows {
+		return nil, nil
+	} else if err != nil {
 		return ret, err
 	}
 	defer rows.Close()
