@@ -381,6 +381,12 @@ func (w *Wallet) broadcastTx(tx *Transaction) (*chainhash.Hash, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	// Our own tx; don't keep track of false positives
+	if _, err := w.txStore.Ingest(tx, b, 0); err != nil {
+		return nil, err
+	}
+
 	return chainhash.NewHashFromStr(hash)
 }
 
