@@ -36,7 +36,6 @@ type Wallet struct {
 	keyManager             *keys.KeyManager
 	masterPrivateKey       *hd.ExtendedKey
 	masterPublicKey        *hd.ExtendedKey
-	listeners              []func(wallet.TransactionCallback)
 	insight                InsightClient
 	isOverwinter           bool
 	txStore                *TxStore
@@ -899,7 +898,7 @@ func (w *Wallet) allWatchedAddrs() []btc.Address {
 
 // Add a callback for incoming transactions
 func (w *Wallet) AddTransactionListener(callback func(wallet.TransactionCallback)) {
-	w.listeners = append(w.listeners, callback)
+	w.txStore.listeners = append(w.txStore.listeners, callback)
 }
 
 func (w *Wallet) ReSyncBlockchain(fromDate time.Time) {
