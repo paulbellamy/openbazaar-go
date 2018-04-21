@@ -163,7 +163,7 @@ func TestWalletCurrentAddress(t *testing.T) {
 	}
 
 	pubkey, _ := externalChild.ECPubKey()
-	hash, err := zcashd.NewAddressPubKeyHash(btc.Hash160(pubkey.SerializeUncompressed()), config.Params)
+	hash, err := zcashd.NewAddressPubKeyHash(btc.Hash160(pubkey.SerializeCompressed()), config.Params)
 	if err != nil {
 		t.Fatal(err)
 	}
