@@ -582,6 +582,7 @@ func TestWalletSpend(t *testing.T) {
 	w.Start()
 	defer w.Close()
 
+	changeAddress := w.CurrentAddress(wallet.INTERNAL)
 	address := w.NewAddress(wallet.EXTERNAL)
 	var expectedAmount int64 = 100000
 	inputHash, _ := chainhash.NewHashFromStr("c")
@@ -705,8 +706,8 @@ func TestWalletSpend(t *testing.T) {
 			addr, err := w.ScriptToAddress(txn.Outputs[1].ScriptPubKey)
 			if err != nil {
 				t.Errorf("error converting output script to address: %v", err)
-			} else if fmt.Sprint(addr) != fmt.Sprint(w.CurrentAddress(wallet.INTERNAL)) {
-				t.Errorf("Expected output address %v, got %v", w.CurrentAddress(wallet.INTERNAL), addr)
+			} else if fmt.Sprint(addr) != fmt.Sprint(changeAddress) {
+				t.Errorf("Expected output address %v, got %v", changeAddress, addr)
 			}
 
 			// Check the sum of the output values is our expected amount
