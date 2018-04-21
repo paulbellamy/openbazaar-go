@@ -1,7 +1,6 @@
 package zcash
 
 import (
-	"bytes"
 	"testing"
 
 	"github.com/OpenBazaar/multiwallet/keys"
@@ -190,11 +189,11 @@ func TestTxStoreIngestMarksExistingDoubleSpendsAsDead(t *testing.T) {
 			{Value: 123400000, ScriptPubKey: script},
 		},
 	}
-	buf := &bytes.Buffer{}
-	if _, err := existingTxn.WriteTo(buf); err != nil {
+	raw, err := existingTxn.MarshalBinary()
+	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := txStore.Ingest(existingTxn, buf.Bytes(), 1); err != nil {
+	if _, err := txStore.Ingest(existingTxn, raw, 1); err != nil {
 		t.Fatal(err)
 	}
 
@@ -213,11 +212,15 @@ func TestTxStoreIngestMarksExistingDoubleSpendsAsDead(t *testing.T) {
 			{PreviousOutPoint: wire.OutPoint{Hash: *receivedTxid, Index: 0}},
 		},
 		Outputs: []Output{
-			// Doesn't matter as long as it is relevant
-			{Value: 123400000, ScriptPubKey: script},
+			// Doesn't matter as long as it is relevant, and different from the existing
+			{Value: 123400001, ScriptPubKey: script},
 		},
 	}
-	if _, err := txStore.Ingest(txn, nil, 9); err != nil {
+	raw, err = txn.MarshalBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := txStore.Ingest(txn, raw, 9); err != nil {
 		t.Fatal(err)
 	}
 
@@ -225,11 +228,11 @@ func TestTxStoreIngestMarksExistingDoubleSpendsAsDead(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, u := range utxos {
-		existingHash := existingTxn.TxHash()
-		if u.Op.Hash.IsEqual(&existingHash) {
-			t.Errorf("Expected old utxo to have been removed")
-		}
+	if len(utxos) != 1 {
+		t.Fatalf("Expected 1 utxo to be found, got: %v\n", utxos)
+	}
+	if outpointsEqual(utxos[0].Op, wire.OutPoint{Hash: existingTxn.TxHash(), Index: 0}) {
+		t.Errorf("Expected old utxo to have been removed")
 	}
 }
 
@@ -449,8 +452,8 @@ func TestTxStoreIngestAddsStxos(t *testing.T) {
 	if len(txns) != 1 {
 		t.Fatalf("Expected 1 txn, got: %d", len(txns))
 	}
-	if txns[0].Value != -123450000 {
-		t.Errorf("Expected txn value %d, got: %d", int64(-123450000), txns[0].Value)
+	if txns[0].Value != -110000000 {
+		t.Errorf("Expected txn value %d, got: %d", int64(-110000000), txns[0].Value)
 	}
 }
 
