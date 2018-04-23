@@ -58,28 +58,39 @@ func NewInsightClient(apiUrl string, proxyDialer proxy.Dialer) (*InsightClient, 
 	socketClient.On(gosocketio.OnConnection, func(h *gosocketio.Channel, args interface{}) {
 		close(socketReady)
 	})
-	ticker := time.NewTicker(time.Second * 10)
 	select {
-	case <-ticker.C:
+	case <-time.After(10 * time.Second):
 		return nil, errors.New("Timed out waiting for websocket connection")
 	case <-socketReady:
 		break
 	}
-	socketClient.Emit("subscribe", "inv")
 
 	bch := make(chan Block)
-	socketClient.On("block", func(h *gosocketio.Channel, arg Block) {
-		bch <- arg
-	})
 	tch := make(chan Transaction)
 	tbTransport := &http.Transport{Dial: dial}
-	return &InsightClient{
-		http.Client{Timeout: time.Second * 30, Transport: tbTransport},
-		*u,
-		bch,
-		tch,
-		socketClient,
-	}, nil
+	insight := &InsightClient{
+		httpClient:      http.Client{Timeout: time.Second * 30, Transport: tbTransport},
+		apiUrl:          *u,
+		blockNotifyChan: bch,
+		txNotifyChan:    tch,
+		socketClient:    socketClient,
+	}
+
+	socketClient.Emit("subscribe", "inv")
+	socketClient.On("block", func(h *gosocketio.Channel, arg websocketBlock) {
+		if block, err := insight.GetBlock(string(arg)); err == nil {
+			// TODO: Handle this error
+			bch <- *block
+		}
+	})
+	socketClient.On("tx", func(h *gosocketio.Channel, arg websocketTransaction) {
+		if txn, err := insight.GetTransaction(arg.Txid); err == nil {
+			// TODO: Handle this error
+			tch <- *txn
+		}
+	})
+
+	return insight, nil
 }
 
 func (i *InsightClient) doRequest(endpoint, method string, body io.Reader, query url.Values) (*http.Response, error) {
@@ -291,6 +302,20 @@ func (i *InsightClient) GetBlockIndex(height int) (*Block, error) {
 	return block, nil
 }
 
+func (i *InsightClient) GetBlock(hash string) (*Block, error) {
+	resp, err := i.doRequest(fmt.Sprintf("block/%s", hash), http.MethodGet, nil, nil)
+	if err != nil {
+		return nil, err
+	}
+	block := new(Block)
+	decoder := json.NewDecoder(resp.Body)
+	defer resp.Body.Close()
+	if err = decoder.Decode(block); err != nil {
+		return nil, fmt.Errorf("error decoding block: %s\n", err)
+	}
+	return block, nil
+}
+
 // GetLatestBlock loads a summary of the latest block
 func (i *InsightClient) GetLatestBlock() (*Block, error) {
 	page, err := i.GetBlocksBefore(time.Now().UTC(), 1)
@@ -347,9 +372,13 @@ func (i *InsightClient) TransactionNotify() <-chan Transaction {
 }
 
 func (i *InsightClient) ListenAddress(addr btcutil.Address) {
+	// TODO: I don't think this actually works. I never receive any txns for this channel.
 	i.socketClient.Emit("subscribe", addr.String())
-	i.socketClient.On(addr.String(), func(h *gosocketio.Channel, arg Transaction) {
-		i.txNotifyChan <- arg
+	i.socketClient.On(addr.String(), func(h *gosocketio.Channel, arg websocketTransaction) {
+		if txn, err := i.GetTransaction(arg.Txid); err == nil {
+			// TODO: Handle this error
+			i.txNotifyChan <- *txn
+		}
 	})
 }
 

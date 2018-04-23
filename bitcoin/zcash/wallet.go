@@ -75,6 +75,7 @@ type InsightClient interface {
 	GetBlocksBefore(time.Time, int) (*client.BlockList, error)
 	GetTransactions(addrs []btc.Address) ([]client.Transaction, error)
 	GetRawTransaction(txid string) ([]byte, error)
+	BlockNotify() <-chan client.Block
 	TransactionNotify() <-chan client.Transaction
 	Broadcast(tx []byte) (string, error)
 	EstimateFee(nbBlocks int) (int, error)
@@ -192,6 +193,18 @@ func (w *Wallet) loadInitialTransactions() {
 func (w *Wallet) watchTransactions() {
 	for {
 		select {
+		case block, ok := <-w.insight.BlockNotify():
+			if !ok {
+				return
+			}
+			// Insight only notifies us of a transaction when it is first seen (i.e.
+			// not mined yet), so we need to watch for new blocks, and check when
+			// txns are mined into them.
+			for _, txid := range block.Tx {
+				if err := w.onTxn(client.Transaction{Txid: txid, BlockHeight: block.Height}); err != nil {
+					log.Errorf("error fetching transaction %v: %v", txid, err)
+				}
+			}
 		case txn, ok := <-w.insight.TransactionNotify():
 			if !ok {
 				return

@@ -169,3 +169,17 @@ type OutScript struct {
 	Addresses []string `json:"addresses"`
 	Type      string   `json:"type"`
 }
+
+// websocketBlock sent from insight are just the block hash string, not any actual block info.
+type websocketBlock string
+
+// websocketTransaction sent from insight are different from regular.
+type websocketTransaction struct {
+	Txid     string            `json:"txid"`
+	IsRBF    bool              `json:"isRBF"`
+	ValueOut float64           `json:"valueOut"`
+	Outputs  []websocketOutput `json:"vout"`
+}
+
+// websocketOutput is a map from { "t1SJ2CR9xV8EFC23WkePVxnMSjThaqE2oLF": 111553112 }
+type websocketOutput map[string]int64

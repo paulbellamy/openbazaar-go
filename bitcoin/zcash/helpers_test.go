@@ -386,6 +386,7 @@ type FakeInsightClient struct {
 	getBlocksBefore   func(time.Time, int) (*client.BlockList, error)
 	getTransactions   func(addrs []btcutil.Address) ([]client.Transaction, error)
 	getRawTransaction func(txid string) ([]byte, error)
+	blockNotify       func() <-chan client.Block
 	transactionNotify func() <-chan client.Transaction
 	broadcast         func(tx []byte) (string, error)
 	estimateFee       func(nbBlocks int) (int, error)
@@ -430,6 +431,13 @@ func (f *FakeInsightClient) GetRawTransaction(txid string) ([]byte, error) {
 		panic("not implemented")
 	}
 	return f.getRawTransaction(txid)
+}
+
+func (f *FakeInsightClient) BlockNotify() <-chan client.Block {
+	if f.blockNotify == nil {
+		return nil
+	}
+	return f.blockNotify()
 }
 
 func (f *FakeInsightClient) TransactionNotify() <-chan client.Transaction {
