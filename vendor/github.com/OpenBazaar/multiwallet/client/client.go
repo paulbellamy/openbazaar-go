@@ -372,7 +372,12 @@ func (i *InsightClient) TransactionNotify() <-chan Transaction {
 }
 
 func (i *InsightClient) ListenAddress(addr btcutil.Address) {
-	// TODO: I don't think this actually works. I never receive any txns for this channel.
+	// TODO: This doesn't work. We never receive any txns for this channel. It
+	// should be a different room, but the golang-socketio library doesn't
+	// support multiple arguments to emit.
+	// See:
+	// https://github.com/bitpay/insight-api/issues/485
+	// https://github.com/graarh/golang-socketio/issues/22
 	i.socketClient.Emit("subscribe", addr.String())
 	i.socketClient.On(addr.String(), func(h *gosocketio.Channel, arg websocketTransaction) {
 		if txn, err := i.GetTransaction(arg.Txid); err == nil {
