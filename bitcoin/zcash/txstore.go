@@ -15,31 +15,90 @@ import (
 )
 
 type TxStore struct {
-	params         *chaincfg.Params
-	db             wallet.Datastore
-	keyManager     *keys.KeyManager
 	adrs           []btcutil.Address
 	watchedScripts [][]byte
 	txids          map[string]int32
 	addrMutex      *sync.Mutex
 	cbMutex        *sync.Mutex
-	listeners      []func(wallet.TransactionCallback)
+
+	keyManager *keys.KeyManager
+
+	params *chaincfg.Params
+
+	listeners []func(wallet.TransactionCallback)
+
+	wallet.Datastore
 }
 
-func NewTxStore(p *chaincfg.Params, db wallet.Datastore, km *keys.KeyManager) (*TxStore, error) {
+func NewTxStore(p *chaincfg.Params, db wallet.Datastore, keyManager *keys.KeyManager) (*TxStore, error) {
 	txs := &TxStore{
 		params:     p,
-		db:         db,
-		keyManager: km,
-		txids:      make(map[string]int32),
+		keyManager: keyManager,
 		addrMutex:  new(sync.Mutex),
 		cbMutex:    new(sync.Mutex),
+		txids:      make(map[string]int32),
+		Datastore:  db,
 	}
 	err := txs.PopulateAdrs()
 	if err != nil {
 		return nil, err
 	}
 	return txs, nil
+}
+
+// GetDoubleSpends takes a transaction and compares it with
+// all transactions in the db.  It returns a slice of all txids in the db
+// which are double spent by the received tx.
+func (ts *TxStore) CheckDoubleSpends(argTx *Transaction) ([]*chainhash.Hash, error) {
+	var dubs []*chainhash.Hash // slice of all double-spent txs
+	argTxid := argTx.TxHash()
+	txs, err := ts.Txns().GetAll(true)
+	if err != nil {
+		return dubs, err
+	}
+	for _, compTx := range txs {
+		if compTx.Height < 0 {
+			continue
+		}
+		r := bytes.NewReader(compTx.Bytes)
+		var msgTx Transaction
+		if _, err := msgTx.ReadFrom(r); err != nil {
+			return nil, err
+		}
+		compTxid := msgTx.TxHash()
+		for _, argIn := range argTx.Inputs {
+			// iterate through inputs of compTx
+			for _, compIn := range msgTx.Inputs {
+				if outPointsEqual(argIn.PreviousOutPoint, compIn.PreviousOutPoint) && !compTxid.IsEqual(&argTxid) {
+					// found double spend
+					dubs = append(dubs, &compTxid)
+					break // back to argIn loop
+				}
+			}
+		}
+	}
+	return dubs, nil
+}
+
+// PopulateAdrs just puts a bunch of adrs in ram; it doesn't touch the DB
+func (ts *TxStore) PopulateAdrs() error {
+	keys := ts.keyManager.GetKeys()
+	ts.addrMutex.Lock()
+	ts.adrs = []btcutil.Address{}
+	for _, k := range keys {
+		addr, err := zcashd.KeyToAddress(k, ts.params)
+		if err != nil {
+			continue
+		}
+		ts.adrs = append(ts.adrs, addr)
+	}
+	ts.watchedScripts, _ = ts.WatchedScripts().GetAll()
+	txns, _ := ts.Txns().GetAll(true)
+	for _, t := range txns {
+		ts.txids[t.Txid] = t.Height
+	}
+	ts.addrMutex.Unlock()
+	return nil
 }
 
 // Ingest puts a tx into the DB atomically.  This can result in a
@@ -110,7 +169,7 @@ func (ts *TxStore) Ingest(tx *Transaction, raw []byte, height int32) (uint32, er
 					WatchOnly:    false,
 				}
 				value += newu.Value
-				ts.db.Utxos().Put(newu)
+				ts.Utxos().Put(newu)
 				hits++
 				break
 			}
@@ -129,13 +188,13 @@ func (ts *TxStore) Ingest(tx *Transaction, raw []byte, height int32) (uint32, er
 					Op:           newop,
 					WatchOnly:    true,
 				}
-				ts.db.Utxos().Put(newu)
+				ts.Utxos().Put(newu)
 				matchesWatchOnly = true
 			}
 		}
 		cb.Outputs = append(cb.Outputs, out)
 	}
-	utxos, err := ts.db.Utxos().GetAll()
+	utxos, err := ts.Utxos().GetAll()
 	if err != nil {
 		return 0, err
 	}
@@ -147,8 +206,8 @@ func (ts *TxStore) Ingest(tx *Transaction, raw []byte, height int32) (uint32, er
 					SpendHeight: height,
 					SpendTxid:   cachedSha,
 				}
-				ts.db.Stxos().Put(st)
-				ts.db.Utxos().Delete(u)
+				ts.Stxos().Put(st)
+				ts.Utxos().Delete(u)
 				utxos = append(utxos[:i], utxos[i+1:]...)
 				if !u.WatchOnly {
 					value -= u.Value
@@ -171,14 +230,14 @@ func (ts *TxStore) Ingest(tx *Transaction, raw []byte, height int32) (uint32, er
 
 	// Update height of any stxos
 	if height > 0 {
-		stxos, err := ts.db.Stxos().GetAll()
+		stxos, err := ts.Stxos().GetAll()
 		if err != nil {
 			return 0, err
 		}
 		for _, stxo := range stxos {
 			if stxo.SpendTxid.IsEqual(&cachedSha) {
 				stxo.SpendHeight = height
-				ts.db.Stxos().Put(stxo)
+				ts.Stxos().Put(stxo)
 				if !stxo.Utxo.WatchOnly {
 					hits++
 				} else {
@@ -192,19 +251,19 @@ func (ts *TxStore) Ingest(tx *Transaction, raw []byte, height int32) (uint32, er
 	// If hits is nonzero it's a relevant tx and we should store it
 	if hits > 0 || matchesWatchOnly {
 		ts.cbMutex.Lock()
-		txn, err := ts.db.Txns().Get(tx.TxHash())
+		txn, err := ts.Txns().Get(tx.TxHash())
 		shouldCallback := false
 		if err != nil {
 			cb.Value = value
 			txn.Timestamp = time.Now()
 			shouldCallback = true
-			ts.db.Txns().Put(raw, tx.TxHash().String(), int(value), int(height), txn.Timestamp, hits == 0)
+			ts.Txns().Put(raw, tx.TxHash().String(), int(value), int(height), txn.Timestamp, hits == 0)
 			ts.txids[tx.TxHash().String()] = height
 		}
 		// Let's check the height before committing so we don't allow rogue peers to send us a lose
 		// tx that resets our height to zero.
 		if txn.Height <= 0 {
-			ts.db.Txns().UpdateHeight(tx.TxHash(), int(height))
+			ts.Txns().UpdateHeight(tx.TxHash(), int(height))
 			ts.txids[tx.TxHash().String()] = height
 			if height > 0 {
 				cb.Value = txn.Value
@@ -224,72 +283,17 @@ func (ts *TxStore) Ingest(tx *Transaction, raw []byte, height int32) (uint32, er
 	return hits, err
 }
 
-// GetDoubleSpends takes a transaction and compares it with
-// all transactions in the db.  It returns a slice of all txids in the db
-// which are double spent by the received tx.
-func (ts *TxStore) CheckDoubleSpends(argTx *Transaction) ([]*chainhash.Hash, error) {
-	var dubs []*chainhash.Hash // slice of all double-spent txs
-	argTxid := argTx.TxHash()
-	txs, err := ts.db.Txns().GetAll(true)
-	if err != nil {
-		return dubs, err
-	}
-	for _, compTx := range txs {
-		if compTx.Height < 0 {
-			continue
-		}
-		r := bytes.NewReader(compTx.Bytes)
-		var msgTx Transaction
-		if _, err := msgTx.ReadFrom(r); err != nil {
-			return nil, err
-		}
-		compTxid := msgTx.TxHash()
-		for _, argIn := range argTx.Inputs {
-			// iterate through inputs of compTx
-			for _, compIn := range msgTx.Inputs {
-				if outPointsEqual(argIn.PreviousOutPoint, compIn.PreviousOutPoint) && !compTxid.IsEqual(&argTxid) {
-					// found double spend
-					dubs = append(dubs, &compTxid)
-					break // back to argIn loop
-				}
-			}
-		}
-	}
-	return dubs, nil
-}
-
-// PopulateAdrs just puts a bunch of adrs in ram; it doesn't touch the DB
-func (ts *TxStore) PopulateAdrs() error {
-	keys := ts.keyManager.GetKeys()
-	ts.addrMutex.Lock()
-	ts.adrs = []btcutil.Address{}
-	for _, k := range keys {
-		addr, err := zcashd.KeyToAddress(k, ts.params)
-		if err != nil {
-			continue
-		}
-		ts.adrs = append(ts.adrs, addr)
-	}
-	ts.watchedScripts, _ = ts.db.WatchedScripts().GetAll()
-	txns, _ := ts.db.Txns().GetAll(true)
-	for _, t := range txns {
-		ts.txids[t.Txid] = t.Height
-	}
-	ts.addrMutex.Unlock()
-	return nil
-}
-
 func (ts *TxStore) markAsDead(txid chainhash.Hash) error {
-	stxos, err := ts.db.Stxos().GetAll()
+	stxos, err := ts.Stxos().GetAll()
 	if err != nil {
 		return err
 	}
 	markStxoAsDead := func(s wallet.Stxo) error {
-		err := ts.db.Stxos().Delete(s)
+		err := ts.Stxos().Delete(s)
 		if err != nil {
 			return err
 		}
-		err = ts.db.Txns().UpdateHeight(s.SpendTxid, -1)
+		err = ts.Txns().UpdateHeight(s.SpendTxid, -1)
 		if err != nil {
 			return err
 		}
@@ -301,7 +305,7 @@ func (ts *TxStore) markAsDead(txid chainhash.Hash) error {
 			if err := markStxoAsDead(s); err != nil {
 				return err
 			}
-			if err := ts.db.Utxos().Put(s.Utxo); err != nil {
+			if err := ts.Utxos().Put(s.Utxo); err != nil {
 				return err
 			}
 		}
@@ -315,25 +319,25 @@ func (ts *TxStore) markAsDead(txid chainhash.Hash) error {
 			}
 		}
 	}
-	utxos, err := ts.db.Utxos().GetAll()
+	utxos, err := ts.Utxos().GetAll()
 	if err != nil {
 		return err
 	}
 	// Dead utxos should just be deleted
 	for _, u := range utxos {
 		if txid.IsEqual(&u.Op.Hash) {
-			err := ts.db.Utxos().Delete(u)
+			err := ts.Utxos().Delete(u)
 			if err != nil {
 				return err
 			}
 		}
 	}
-	ts.db.Txns().UpdateHeight(txid, -1)
+	ts.Txns().UpdateHeight(txid, -1)
 	return nil
 }
 
 func (ts *TxStore) processReorg(lastGoodHeight uint32) error {
-	txns, err := ts.db.Txns().GetAll(true)
+	txns, err := ts.Txns().GetAll(true)
 	if err != nil {
 		return err
 	}
