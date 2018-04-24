@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/OpenBazaar/openbazaar-go/bitcoin/zcashd"
 	"github.com/OpenBazaar/spvwallet"
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcd/txscript"
@@ -61,7 +62,7 @@ func SignN(params *chaincfg.Params, multisigdata [][]byte, creator SignatureCrea
 	var nRequired int = int(multisigdata[0][0])
 	for i := 1; i < len(multisigdata)-1 && nSigned < nRequired; i++ {
 		pubkey := multisigdata[i]
-		address, err := NewAddressPubKeyHash(btc.Hash160(pubkey), params)
+		address, err := zcashd.NewAddressPubKeyHash(btc.Hash160(pubkey), params)
 		if err != nil {
 			continue
 		}
@@ -82,7 +83,7 @@ func SignN(params *chaincfg.Params, multisigdata [][]byte, creator SignatureCrea
  * Returns false if scriptPubKey could not be completely satisfied.
  */
 func SignStep(params *chaincfg.Params, creator SignatureCreator, scriptPubKey []byte, consensusBranchId uint32) ([][]byte, txscript.ScriptClass, bool) {
-	addr, err := ExtractPkScriptAddrs(scriptPubKey, params)
+	addr, err := zcashd.ExtractPkScriptAddrs(scriptPubKey, params)
 	if err != nil {
 		return nil, 0, false
 	}

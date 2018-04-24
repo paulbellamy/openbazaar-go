@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/OpenBazaar/multiwallet/keys"
+	"github.com/OpenBazaar/openbazaar-go/bitcoin/zcashd"
 	wallet "github.com/OpenBazaar/wallet-interface"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
 	"github.com/btcsuite/btcd/wire"
@@ -15,7 +16,7 @@ func TestTxStoreIngestAddsTxnsToDB(t *testing.T) {
 	config := testConfig(t)
 	seed := b39.NewSeed(config.Mnemonic, "")
 	mPrivKey, _ := hd.NewMaster(seed, config.Params)
-	keyManager, err := keys.NewKeyManager(config.DB.Keys(), config.Params, mPrivKey, keys.Zcash, keyToAddress)
+	keyManager, err := keys.NewKeyManager(config.DB.Keys(), config.Params, mPrivKey, keys.Zcash, zcashd.KeyToAddress)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -49,7 +50,7 @@ func TestTxStoreIngestIgnoresDuplicates(t *testing.T) {
 	config := testConfig(t)
 	seed := b39.NewSeed(config.Mnemonic, "")
 	mPrivKey, _ := hd.NewMaster(seed, config.Params)
-	keyManager, err := keys.NewKeyManager(config.DB.Keys(), config.Params, mPrivKey, keys.Zcash, keyToAddress)
+	keyManager, err := keys.NewKeyManager(config.DB.Keys(), config.Params, mPrivKey, keys.Zcash, zcashd.KeyToAddress)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,7 +84,7 @@ func TestTxStoreIngestIgnoresUnconfirmedDoubleSpends(t *testing.T) {
 	config := testConfig(t)
 	seed := b39.NewSeed(config.Mnemonic, "")
 	mPrivKey, _ := hd.NewMaster(seed, config.Params)
-	keyManager, err := keys.NewKeyManager(config.DB.Keys(), config.Params, mPrivKey, keys.Zcash, keyToAddress)
+	keyManager, err := keys.NewKeyManager(config.DB.Keys(), config.Params, mPrivKey, keys.Zcash, zcashd.KeyToAddress)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,11 +96,11 @@ func TestTxStoreIngestIgnoresUnconfirmedDoubleSpends(t *testing.T) {
 	if len(keys) == 0 {
 		t.Fatal(err)
 	}
-	address, err := keyToAddress(keys[0], config.Params)
+	address, err := zcashd.KeyToAddress(keys[0], config.Params)
 	if err != nil {
 		t.Fatal(err)
 	}
-	script, err := PayToAddrScript(address)
+	script, err := zcashd.PayToAddrScript(address)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,7 +156,7 @@ func TestTxStoreIngestMarksExistingDoubleSpendsAsDead(t *testing.T) {
 	config := testConfig(t)
 	seed := b39.NewSeed(config.Mnemonic, "")
 	mPrivKey, _ := hd.NewMaster(seed, config.Params)
-	keyManager, err := keys.NewKeyManager(config.DB.Keys(), config.Params, mPrivKey, keys.Zcash, keyToAddress)
+	keyManager, err := keys.NewKeyManager(config.DB.Keys(), config.Params, mPrivKey, keys.Zcash, zcashd.KeyToAddress)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -167,11 +168,11 @@ func TestTxStoreIngestMarksExistingDoubleSpendsAsDead(t *testing.T) {
 	if len(keys) == 0 {
 		t.Fatal(err)
 	}
-	address, err := keyToAddress(keys[0], config.Params)
+	address, err := zcashd.KeyToAddress(keys[0], config.Params)
 	if err != nil {
 		t.Fatal(err)
 	}
-	script, err := PayToAddrScript(address)
+	script, err := zcashd.PayToAddrScript(address)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -240,7 +241,7 @@ func TestTxStoreIngestRejectsInvalidTxns(t *testing.T) {
 	config := testConfig(t)
 	seed := b39.NewSeed(config.Mnemonic, "")
 	mPrivKey, _ := hd.NewMaster(seed, config.Params)
-	keyManager, err := keys.NewKeyManager(config.DB.Keys(), config.Params, mPrivKey, keys.Zcash, keyToAddress)
+	keyManager, err := keys.NewKeyManager(config.DB.Keys(), config.Params, mPrivKey, keys.Zcash, zcashd.KeyToAddress)
 	txStore, err := NewTxStore(config.Params, config.DB, keyManager)
 	if err != nil {
 		t.Fatal(err)
@@ -266,7 +267,7 @@ func TestTxStoreIngestUpdatesUtxos(t *testing.T) {
 	}
 	seed := b39.NewSeed(config.Mnemonic, "")
 	mPrivKey, _ := hd.NewMaster(seed, config.Params)
-	keyManager, err := keys.NewKeyManager(config.DB.Keys(), config.Params, mPrivKey, keys.Zcash, keyToAddress)
+	keyManager, err := keys.NewKeyManager(config.DB.Keys(), config.Params, mPrivKey, keys.Zcash, zcashd.KeyToAddress)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -278,11 +279,11 @@ func TestTxStoreIngestUpdatesUtxos(t *testing.T) {
 	if len(keys) == 0 {
 		t.Fatal(err)
 	}
-	address, err := keyToAddress(keys[0], config.Params)
+	address, err := zcashd.KeyToAddress(keys[0], config.Params)
 	if err != nil {
 		t.Fatal(err)
 	}
-	script, err := PayToAddrScript(address)
+	script, err := zcashd.PayToAddrScript(address)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -315,7 +316,7 @@ func TestTxStoreIngestOnlyStoresRelevantTxns(t *testing.T) {
 	config := testConfig(t)
 	seed := b39.NewSeed(config.Mnemonic, "")
 	mPrivKey, _ := hd.NewMaster(seed, config.Params)
-	keyManager, err := keys.NewKeyManager(config.DB.Keys(), config.Params, mPrivKey, keys.Zcash, keyToAddress)
+	keyManager, err := keys.NewKeyManager(config.DB.Keys(), config.Params, mPrivKey, keys.Zcash, zcashd.KeyToAddress)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -328,8 +329,8 @@ func TestTxStoreIngestOnlyStoresRelevantTxns(t *testing.T) {
 		t.Fatal(err)
 	}
 	// random testnet address
-	address, err := DecodeAddress("tmD8E94EC75EbRGWYWAEMU48Gmm1bJmkp3m", config.Params)
-	script, err := PayToAddrScript(address)
+	address, err := zcashd.DecodeAddress("tmD8E94EC75EbRGWYWAEMU48Gmm1bJmkp3m", config.Params)
+	script, err := zcashd.PayToAddrScript(address)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -359,7 +360,7 @@ func TestTxStoreIngestAddsStxos(t *testing.T) {
 	config := testConfig(t)
 	seed := b39.NewSeed(config.Mnemonic, "")
 	mPrivKey, _ := hd.NewMaster(seed, config.Params)
-	keyManager, err := keys.NewKeyManager(config.DB.Keys(), config.Params, mPrivKey, keys.Zcash, keyToAddress)
+	keyManager, err := keys.NewKeyManager(config.DB.Keys(), config.Params, mPrivKey, keys.Zcash, zcashd.KeyToAddress)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -371,13 +372,13 @@ func TestTxStoreIngestAddsStxos(t *testing.T) {
 	if len(keys) == 0 {
 		t.Fatal(err)
 	}
-	address, err := keyToAddress(keys[0], config.Params)
+	address, err := zcashd.KeyToAddress(keys[0], config.Params)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Set up a previous txn where we received some utxos
-	outScript, err := PayToAddrScript(address)
+	outScript, err := zcashd.PayToAddrScript(address)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -396,11 +397,11 @@ func TestTxStoreIngestAddsStxos(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	burnAddress, err := keyToAddress(burnKey, config.Params)
+	burnAddress, err := zcashd.KeyToAddress(burnKey, config.Params)
 	if err != nil {
 		t.Fatal(err)
 	}
-	burnScript, err := PayToAddrScript(burnAddress)
+	burnScript, err := zcashd.PayToAddrScript(burnAddress)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -461,7 +462,7 @@ func TestTxStoreIngestUpdatesStxosHeight(t *testing.T) {
 	config := testConfig(t)
 	seed := b39.NewSeed(config.Mnemonic, "")
 	mPrivKey, _ := hd.NewMaster(seed, config.Params)
-	keyManager, err := keys.NewKeyManager(config.DB.Keys(), config.Params, mPrivKey, keys.Zcash, keyToAddress)
+	keyManager, err := keys.NewKeyManager(config.DB.Keys(), config.Params, mPrivKey, keys.Zcash, zcashd.KeyToAddress)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -473,13 +474,13 @@ func TestTxStoreIngestUpdatesStxosHeight(t *testing.T) {
 	if len(keys) == 0 {
 		t.Fatal(err)
 	}
-	address, err := keyToAddress(keys[0], config.Params)
+	address, err := zcashd.KeyToAddress(keys[0], config.Params)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Set up a previous txn where we received some utxos
-	outScript, err := PayToAddrScript(address)
+	outScript, err := zcashd.PayToAddrScript(address)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -490,11 +491,11 @@ func TestTxStoreIngestUpdatesStxosHeight(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	burnAddress, err := keyToAddress(burnKey, config.Params)
+	burnAddress, err := zcashd.KeyToAddress(burnKey, config.Params)
 	if err != nil {
 		t.Fatal(err)
 	}
-	burnScript, err := PayToAddrScript(burnAddress)
+	burnScript, err := zcashd.PayToAddrScript(burnAddress)
 	if err != nil {
 		t.Fatal(err)
 	}

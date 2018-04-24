@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/OpenBazaar/multiwallet/keys"
+	"github.com/OpenBazaar/openbazaar-go/bitcoin/zcashd"
 	"github.com/OpenBazaar/wallet-interface"
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcd/chaincfg/chainhash"
@@ -79,7 +80,7 @@ func (ts *TxStore) Ingest(tx *Transaction, raw []byte, height int32) (uint32, er
 	for i := range ts.adrs {
 		// Iterate through all our addresses
 		// TODO: This will need to test both segwit and legacy once segwit activates
-		PKscripts[i], err = PayToAddrScript(ts.adrs[i])
+		PKscripts[i], err = zcashd.PayToAddrScript(ts.adrs[i])
 		if err != nil {
 			return hits, err
 		}
@@ -263,7 +264,7 @@ func (ts *TxStore) PopulateAdrs() error {
 	ts.addrMutex.Lock()
 	ts.adrs = []btcutil.Address{}
 	for _, k := range keys {
-		addr, err := keyToAddress(k, ts.params)
+		addr, err := zcashd.KeyToAddress(k, ts.params)
 		if err != nil {
 			continue
 		}
@@ -354,7 +355,7 @@ func (ts *TxStore) processReorg(lastGoodHeight uint32) error {
 }
 
 func (ts *TxStore) extractScriptAddress(script []byte) ([]byte, error) {
-	addr, err := ExtractPkScriptAddrs(script, ts.params)
+	addr, err := zcashd.ExtractPkScriptAddrs(script, ts.params)
 	if err != nil {
 		return nil, err
 	}

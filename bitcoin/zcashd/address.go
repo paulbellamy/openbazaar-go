@@ -6,10 +6,12 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"fmt"
+
 	"github.com/btcsuite/btcd/chaincfg"
 	"github.com/btcsuite/btcd/txscript"
 	"github.com/btcsuite/btcutil"
 	"github.com/btcsuite/btcutil/base58"
+	hd "github.com/btcsuite/btcutil/hdkeychain"
 	"golang.org/x/crypto/ripemd160"
 )
 
@@ -332,4 +334,23 @@ func ExtractPkScriptAddrs(pkScript []byte, chainParams *chaincfg.Params) (btcuti
 		return NewAddressPubKeyHash(pkScript[3:23], chainParams)
 	}
 	return nil, errors.New("unknown script type")
+}
+
+func KeysToAddresses(params *chaincfg.Params, keys []*hd.ExtendedKey) (addrs []btcutil.Address, err error) {
+	for _, k := range keys {
+		addr, err := KeyToAddress(k, params)
+		if err != nil {
+			return nil, err
+		}
+		addrs = append(addrs, addr)
+	}
+	return addrs, nil
+}
+
+func KeyToAddress(key *hd.ExtendedKey, params *chaincfg.Params) (btcutil.Address, error) {
+	pubkey, err := key.ECPubKey()
+	if err != nil {
+		return nil, err
+	}
+	return NewAddressPubKeyHash(btcutil.Hash160(pubkey.SerializeCompressed()), params)
 }

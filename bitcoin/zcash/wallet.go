@@ -9,6 +9,7 @@ import (
 
 	"github.com/OpenBazaar/multiwallet/client"
 	"github.com/OpenBazaar/multiwallet/keys"
+	"github.com/OpenBazaar/openbazaar-go/bitcoin/zcashd"
 	"github.com/OpenBazaar/spvwallet"
 	"github.com/OpenBazaar/wallet-interface"
 	"github.com/btcsuite/btcd/btcec"
@@ -87,7 +88,7 @@ func NewWallet(config Config) (*Wallet, error) {
 	seed := b39.NewSeed(config.Mnemonic, "")
 	mPrivKey, _ := hd.NewMaster(seed, config.Params)
 	mPubKey, _ := mPrivKey.Neuter()
-	keyManager, err := keys.NewKeyManager(config.DB.Keys(), config.Params, mPrivKey, keys.Zcash, keyToAddress)
+	keyManager, err := keys.NewKeyManager(config.DB.Keys(), config.Params, mPrivKey, keys.Zcash, zcashd.KeyToAddress)
 	if err != nil {
 		return nil, fmt.Errorf("error initializing key manager: %v", err)
 	}
@@ -164,7 +165,7 @@ func (w *Wallet) onTxn(txn client.Transaction) error {
 func (w *Wallet) subscribeToAllAddresses() {
 	keys := w.keyManager.GetKeys()
 	for _, k := range keys {
-		if addr, err := keyToAddress(k, w.Params()); err == nil {
+		if addr, err := zcashd.KeyToAddress(k, w.Params()); err == nil {
 			w.addWatchedAddr(addr)
 		}
 	}
@@ -250,52 +251,33 @@ func (w *Wallet) MasterPublicKey() *hd.ExtendedKey {
 // TODO: Handle these errors
 func (w *Wallet) CurrentAddress(purpose wallet.KeyPurpose) btc.Address {
 	key, _ := w.keyManager.GetCurrentKey(purpose)
-	addr, _ := keyToAddress(key, w.Params())
+	addr, _ := zcashd.KeyToAddress(key, w.Params())
 	return addr
 }
 
 // Returns a fresh address that has never been returned by this function
 func (w *Wallet) NewAddress(purpose wallet.KeyPurpose) btc.Address {
 	key, _ := w.keyManager.GetFreshKey(purpose)
-	addr, _ := keyToAddress(key, w.Params())
+	addr, _ := zcashd.KeyToAddress(key, w.Params())
 	w.DB.Keys().MarkKeyAsUsed(addr.ScriptAddress())
 	w.addWatchedAddr(addr)
 	w.txStore.PopulateAdrs()
 	return addr
 }
 
-func keysToAddresses(params *chaincfg.Params, keys []*hd.ExtendedKey) (addrs []btc.Address, err error) {
-	for _, k := range keys {
-		addr, err := keyToAddress(k, params)
-		if err != nil {
-			return nil, err
-		}
-		addrs = append(addrs, addr)
-	}
-	return addrs, nil
-}
-
-func keyToAddress(key *hd.ExtendedKey, params *chaincfg.Params) (btc.Address, error) {
-	pubkey, err := key.ECPubKey()
-	if err != nil {
-		return nil, err
-	}
-	return NewAddressPubKeyHash(btc.Hash160(pubkey.SerializeCompressed()), params)
-}
-
 // Parse the address string and return an address interface
 func (w *Wallet) DecodeAddress(addr string) (btc.Address, error) {
-	return DecodeAddress(addr, w.Params())
+	return zcashd.DecodeAddress(addr, w.Params())
 }
 
 // Turn the given output script into an address
 func (w *Wallet) ScriptToAddress(script []byte) (btc.Address, error) {
-	return ExtractPkScriptAddrs(script, w.Params())
+	return zcashd.ExtractPkScriptAddrs(script, w.Params())
 }
 
 // Turn the given address into an output script
 func (w *Wallet) AddressToScript(addr btc.Address) ([]byte, error) {
-	return PayToAddrScript(addr)
+	return zcashd.PayToAddrScript(addr)
 }
 
 // Returns if the wallet has the key for the given address
@@ -403,7 +385,7 @@ func (w *Wallet) broadcastTx(tx *Transaction) (*chainhash.Hash, error) {
 }
 
 func (w *Wallet) buildTxn(amount int64, addr btc.Address, feeLevel wallet.FeeLevel) (*Transaction, error) {
-	script, err := PayToAddrScript(addr)
+	script, err := w.AddressToScript(addr)
 	if err != nil {
 		return nil, err
 	}
@@ -440,7 +422,7 @@ func (w *Wallet) buildTxn(amount int64, addr btc.Address, feeLevel wallet.FeeLev
 			})
 			additionalPrevScripts[*outpoint] = c.PkScript()
 			key := coinMap[c]
-			addr, err := keyToAddress(key, w.Params())
+			addr, err := zcashd.KeyToAddress(key, w.Params())
 			if err != nil {
 				continue
 			}
@@ -463,7 +445,7 @@ func (w *Wallet) buildTxn(amount int64, addr btc.Address, feeLevel wallet.FeeLev
 	// Create change source
 	changeSource := func() ([]byte, error) {
 		addr := w.CurrentAddress(wallet.INTERNAL)
-		script, err := PayToAddrScript(addr)
+		script, err := w.AddressToScript(addr)
 		if err != nil {
 			return []byte{}, err
 		}
@@ -609,7 +591,7 @@ func (w *Wallet) EstimateFee(ins []wallet.TransactionInput, outs []wallet.Transa
 // Build a spend transaction for the amount and return the transaction fee
 func (w *Wallet) EstimateSpendFee(amount int64, feeLevel wallet.FeeLevel) (uint64, error) {
 	<-w.initChan
-	addr, err := DecodeAddress("t1VpYecBW4UudbGcy4ufh61eWxQCoFaUrPs", &chaincfg.MainNetParams)
+	addr, err := w.DecodeAddress("t1VpYecBW4UudbGcy4ufh61eWxQCoFaUrPs")
 	if err != nil {
 		return 0, err
 	}
@@ -653,7 +635,7 @@ func (w *Wallet) SweepAddress(utxos []wallet.Utxo, address *btc.Address, key *hd
 	} else {
 		internalAddr = w.CurrentAddress(wallet.INTERNAL)
 	}
-	script, err := PayToAddrScript(internalAddr)
+	script, err := w.AddressToScript(internalAddr)
 	if err != nil {
 		return nil, err
 	}
@@ -771,7 +753,7 @@ func (w *Wallet) CreateMultisigSignature(ins []wallet.TransactionInput, outs []w
 		return sigs, err
 	}
 
-	addr, err := keyToAddress(key, w.Params())
+	addr, err := zcashd.KeyToAddress(key, w.Params())
 	if err != nil {
 		return sigs, err
 	}
@@ -873,7 +855,7 @@ func (w *Wallet) GenerateMultisigScript(keys []hd.ExtendedKey, threshold int, ti
 	if err != nil {
 		return nil, nil, err
 	}
-	addr, err = NewAddressScriptHash(redeemScript, w.Params())
+	addr, err = zcashd.NewAddressScriptHash(redeemScript, w.Params())
 	if err != nil {
 		return nil, nil, err
 	}

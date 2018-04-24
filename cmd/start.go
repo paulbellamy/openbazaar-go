@@ -678,7 +678,7 @@ func (x *Start) Execute(args []string) error {
 			return err
 		}
 		if !x.DisableExchangeRates {
-			exchangeRates = zcash.NewZcashPriceFetcher(torDialer)
+			exchangeRates = zcashd.NewZcashPriceFetcher(torDialer)
 		}
 		resyncManager = resync.NewResyncManager(sqliteDB.Sales(), cryptoWallet)
 	default:
