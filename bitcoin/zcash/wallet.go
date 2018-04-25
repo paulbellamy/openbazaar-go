@@ -71,7 +71,7 @@ var (
 )
 
 type InsightClient interface {
-	Status() (*client.Status, error)
+	GetInfo() (*client.Info, error)
 	GetLatestBlock() (*client.Block, error)
 	GetBlocksBefore(time.Time, int) (*client.BlockList, error)
 	GetTransactions(addrs []btc.Address) ([]client.Transaction, error)
@@ -116,11 +116,11 @@ func NewWallet(config Config) (*Wallet, error) {
 		addrSubscriptions: make(map[btc.Address]struct{}),
 	}
 
-	status, err := w.insight.Status()
+	info, err := w.insight.GetInfo()
 	if err != nil {
 		return nil, fmt.Errorf("error loading insight api status: %v", err)
 	}
-	w.isOverwinter = status.Info.ProtocolVersion >= OverwinterProtocolVersion
+	w.isOverwinter = info.ProtocolVersion >= OverwinterProtocolVersion
 
 	return w, nil
 }
