@@ -8,6 +8,30 @@ import (
 	"time"
 )
 
+type CoinType uint32
+
+const (
+	Bitcoin     CoinType = 0
+	Litecoin             = 1
+	Zcash                = 133
+	BitcoinCash CoinType = 145
+)
+
+func (c *CoinType) String() string {
+	switch *c {
+	case Bitcoin:
+		return "Bitcoin"
+	case BitcoinCash:
+		return "Bitcoin Cash"
+	case Zcash:
+		return "Zcash"
+	case Litecoin:
+		return "Litecoin"
+	default:
+		return ""
+	}
+}
+
 type Datastore interface {
 	Utxos() Utxos
 	Stxos() Stxos
@@ -43,9 +67,9 @@ type Stxos interface {
 
 type Txns interface {
 	// Put a new transaction to the database
-	Put(txn []byte, txid string, value, height int, timestamp time.Time, watchOnly bool) error
+	Put(raw []byte, txid string, value, height int, timestamp time.Time, watchOnly bool) error
 
-	// Fetch a raw tx and it's metadata given a hash
+	// Fetch a tx and it's metadata given a hash
 	Get(txid chainhash.Hash) (Txn, error)
 
 	// Fetch all transactions from the db

@@ -1,7 +1,7 @@
 {
 	"ImportPath": "github.com/OpenBazaar/openbazaar-go",
 	"GoVersion": "go1.9",
-	"GodepVersion": "v79",
+	"GodepVersion": "v80",
 	"Deps": [
 		{
 			"ImportPath": "github.com/OpenBazaar/multiwallet",
@@ -21,7 +21,7 @@
 		},
 		{
 			"ImportPath": "github.com/OpenBazaar/wallet-interface",
-			"Rev": "599ef28caef087c5732f9d046468a46f3a513aa9"
+			"Rev": "479e8eca15d00e36675bf514bd4ab1a06e074ed1"
 		},
 		{
 			"ImportPath": "github.com/boltdb/bolt",
